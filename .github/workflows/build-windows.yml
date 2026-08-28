@@ -36,7 +36,7 @@ jobs:
     - name: Build EXE with PyInstaller
       shell: bash
       run: |
-        pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources;resources" --add-data "config;config" --add-data "data;data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator ballontranslator/__main__.py
+        pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources;resources" --add-data "config;config" --add-data "data;data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator run.py
 
     - name: Copy extra files
       shell: bash
@@ -85,7 +85,7 @@ jobs:
     - name: Build APP with PyInstaller
       shell: bash
       run: |
-        pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources:resources" --add-data "config:config" --add-data "data:data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator ballontranslator/__main__.py
+        pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources:resources" --add-data "config:config" --add-data "data:data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator run.py
 
     - name: Copy extra files
       shell: bash
