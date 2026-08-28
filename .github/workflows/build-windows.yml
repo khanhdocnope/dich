@@ -23,43 +23,34 @@ jobs:
         cache: 'pip'
 
     - name: Install dependencies
+      shell: bash
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pyinstaller
 
     - name: Install PyTorch (CPU)
+      shell: bash
       run: |
         pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
     - name: Build EXE with PyInstaller
+      shell: bash
       run: |
-        pyinstaller ^
-          --name "BallonsTranslator" ^
-          --onedir ^
-          --windowed ^
-          --noconfirm ^
-          --clean ^
-          --add-data "resources;resources" ^
-          --add-data "config;config" ^
-          --add-data "data;data" ^
-          --hidden-import ballontranslator ^
-          --hidden-import ballontranslator.modules ^
-          --hidden-import ballontranslator.ui ^
-          --hidden-import ballontranslator.utils ^
-          --collect-submodules ballontranslator ^
-          ballontranslator/__main__.py
+        pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources;resources" --add-data "config;config" --add-data "data;data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator ballontranslator/__main__.py
 
     - name: Copy extra files
+      shell: bash
       run: |
-        xcopy /E /I /Y "fonts" "dist\BallonsTranslator\fonts"
-        xcopy /E /I /Y "doc" "dist\BallonsTranslator\doc"
-        copy /Y "launch_win.bat" "dist\BallonsTranslator\"
-        copy /Y "README.md" "dist\BallonsTranslator\"
+        cp -r fonts dist/BallonsTranslator/fonts
+        cp -r doc dist/BallonsTranslator/doc
+        cp launch_win.bat dist/BallonsTranslator/
+        cp README.md dist/BallonsTranslator/
 
     - name: Create ZIP archive
+      shell: bash
       run: |
-        Compress-Archive -Path "dist\BallonsTranslator\*" -DestinationPath "dist\BallonsTranslator_win.zip"
+        cd dist && 7z a BallonsTranslator_win.zip BallonsTranslator/
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

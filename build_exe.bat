@@ -25,21 +25,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 REM Build EXE
 echo.
 echo [3/5] Building EXE...
-pyinstaller ^
-    --name "BallonsTranslator" ^
-    --onedir ^
-    --windowed ^
-    --noconfirm ^
-    --clean ^
-    --add-data "resources;resources" ^
-    --add-data "config;config" ^
-    --add-data "data;data" ^
-    --hidden-import ballontranslator ^
-    --hidden-import ballontranslator.modules ^
-    --hidden-import ballontranslator.ui ^
-    --hidden-import ballontranslator.utils ^
-    --collect-submodules ballontranslator ^
-    ballontranslator/__main__.py
+pyinstaller --name "BallonsTranslator" --onedir --windowed --noconfirm --clean --add-data "resources;resources" --add-data "config;config" --add-data "data;data" --hidden-import ballontranslator --hidden-import ballontranslator.modules --hidden-import ballontranslator.ui --hidden-import ballontranslator.utils --collect-submodules ballontranslator ballontranslator/__main__.py
 
 REM Copy extra files
 echo.
