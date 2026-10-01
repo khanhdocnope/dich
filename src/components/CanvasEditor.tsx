@@ -7,7 +7,10 @@ import {
   MousePointer, 
   Plus, 
   Split, 
-  Sparkles
+  Sparkles,
+  ImagePlus,
+  UploadCloud,
+  FileImage
 } from 'lucide-react';
 import { Bubble } from '../types';
 import { renderBubbleOnCanvas, defaultTextStyle } from '../services/typesettingEngine';
@@ -22,6 +25,7 @@ interface CanvasEditorProps {
   onAddBubble: (bubble: Bubble) => void;
   onDeleteBubble: (id: string) => void;
   onManualInpaintArea?: (maskBase64: string) => void;
+  onAddImages?: (files: FileList | File[]) => void;
 }
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({
@@ -34,10 +38,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   onAddBubble,
   onDeleteBubble,
   onManualInpaintArea,
+  onAddImages,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // View & Transform States
   const [zoom, setZoom] = useState<number>(0.8);
@@ -45,6 +51,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [startPan, setStartPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState<boolean>(false);
+  const [isDraggingFileOver, setIsDraggingFileOver] = useState<boolean>(false);
 
   // Tools & View Modes
   const [activeTool, setActiveTool] = useState<'select' | 'add_bubble' | 'brush'>('select');
@@ -67,7 +74,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const cleanedImgRef = useRef<HTMLImageElement | null>(null);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number }>({ width: 800, height: 1200 });
 
-  // Keyboard Spacebar for Pan
+  // Keyboard Spacebar for Pan & Delete Shortcut
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
@@ -100,7 +107,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Load Raw Image
   useEffect(() => {
-    if (!rawImageUrl) return;
+    if (!rawImageUrl) {
+      rawImgRef.current = null;
+      return;
+    }
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.src = rawImageUrl;
@@ -555,6 +565,28 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     handleClearMask();
   };
 
+  // Drag and Drop File Handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFileOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFileOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFileOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0 && onAddImages) {
+      onAddImages(e.dataTransfer.files);
+    }
+  };
+
   // Zoom Presets
   const setZoomPreset = (scale: number) => {
     if (!containerRef.current || !rawImgRef.current) return;
@@ -580,107 +612,142 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   };
 
   return (
-    <div className="relative flex-1 h-full overflow-hidden canvas-grid-bg flex flex-col select-none">
-      {/* Top Floating Studio Toolbar */}
-      <div className="canvas-floating-toolbar">
-        {/* Tool Segment */}
-        <div className="segmented-group">
-          <button
-            onClick={() => setActiveTool('select')}
-            className={`segmented-btn ${activeTool === 'select' ? 'active' : ''}`}
-            title="Công cụ chọn & di chuyển ô thoại (V)"
-          >
-            <MousePointer className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="desktop-inline">Chọn (V)</span>
-          </button>
+    <div 
+      className="relative flex-1 h-full overflow-hidden canvas-grid-bg flex flex-col select-none"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Hidden File Input for Picking from Gallery */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0 && onAddImages) {
+            onAddImages(e.target.files);
+            e.target.value = '';
+          }
+        }}
+        accept="image/*"
+        multiple
+        className="hidden"
+      />
 
-          <button
-            onClick={() => setActiveTool('add_bubble')}
-            className={`segmented-btn ${activeTool === 'add_bubble' ? 'active' : ''}`}
-            title="Tạo ô thoại mới trên trang truyện (B)"
-          >
-            <Plus className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="desktop-inline">Thêm Ô (B)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTool('brush')}
-            className={`segmented-btn ${activeTool === 'brush' ? 'active' : ''}`}
-            title="Cọ tô vùng cần LaMa xóa nền thủ công"
-          >
-            <Brush className="w-3.5 h-3.5 text-red-400" />
-            <span className="desktop-inline">Cọ LaMa</span>
-          </button>
+      {/* Drag Over Overlay */}
+      {isDraggingFileOver && (
+        <div className="absolute inset-0 z-40 bg-indigo-950/80 backdrop-blur-sm border-2 border-dashed border-indigo-400 flex flex-col items-center justify-center p-6 space-y-4">
+          <div className="p-4 rounded-3xl bg-indigo-600/30 text-indigo-300 animate-bounce">
+            <UploadCloud className="w-12 h-12" />
+          </div>
+          <div className="text-center space-y-1">
+            <h3 className="text-lg font-bold text-white">Thả ảnh vào đây để nạp vào Studio</h3>
+            <p className="text-xs text-indigo-200">Tự động xử lý và lưu trữ vào ứng dụng</p>
+          </div>
         </div>
+      )}
 
-        {/* View Layer Segment */}
-        <div className="segmented-group">
-          <button
-            onClick={() => setViewLayer('rendered')}
-            className={`segmented-btn ${viewLayer === 'rendered' ? 'active' : ''}`}
-            title="Xem tranh đã dịch hoàn chỉnh"
-          >
-            <span>Hoàn Chỉnh</span>
-          </button>
-          <button
-            onClick={() => setViewLayer('original')}
-            className={`segmented-btn ${viewLayer === 'original' ? 'active' : ''}`}
-            title="Xem tranh gốc tiếng Nhật/Trung"
-          >
-            <span>Ảnh Gốc</span>
-          </button>
-          <button
-            onClick={() => setViewLayer('inpainted')}
-            className={`segmented-btn ${viewLayer === 'inpainted' ? 'active' : ''}`}
-            title="Xem tranh đã xóa chữ sạch"
-          >
-            <span>Đã Xóa Chữ</span>
-          </button>
-          <button
-            onClick={() => setViewLayer('split')}
-            className={`segmented-btn ${viewLayer === 'split' ? 'active' : ''}`}
-            title="So sánh Trước / Sau"
-          >
-            <Split className="w-3.5 h-3.5 text-purple-400" />
-            <span className="desktop-inline">So Sánh</span>
-          </button>
-        </div>
+      {/* Top Floating Studio Toolbar (Only shown when an image is loaded) */}
+      {rawImageUrl && (
+        <div className="canvas-floating-toolbar">
+          {/* Tool Segment */}
+          <div className="segmented-group">
+            <button
+              onClick={() => setActiveTool('select')}
+              className={`segmented-btn ${activeTool === 'select' ? 'active' : ''}`}
+              title="Công cụ chọn & di chuyển ô thoại (V)"
+            >
+              <MousePointer className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="desktop-inline">Chọn (V)</span>
+            </button>
 
-        {/* Zoom Controls Segment */}
-        <div className="segmented-group">
-          <button
-            onClick={() => setZoom((z) => Math.max(0.1, z * 0.85))}
-            className="btn-icon"
-            title="Thu nhỏ"
-          >
-            <ZoomOut className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setZoomPreset(1.0)}
-            className="segmented-btn font-mono text-[11px] px-1.5 desktop-inline"
-            title="Đặt 100% kích thước thực"
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            onClick={() => setZoom((z) => Math.min(4.5, z * 1.15))}
-            className="btn-icon"
-            title="Phóng to"
-          >
-            <ZoomIn className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleFitScreen}
-            className="btn-icon"
-            title="Vừa vặn màn hình"
-          >
-            <Maximize className="w-3.5 h-3.5" />
-          </button>
+            <button
+              onClick={() => setActiveTool('add_bubble')}
+              className={`segmented-btn ${activeTool === 'add_bubble' ? 'active' : ''}`}
+              title="Tạo ô thoại mới trên trang truyện (B)"
+            >
+              <Plus className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="desktop-inline">Thêm Ô (B)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTool('brush')}
+              className={`segmented-btn ${activeTool === 'brush' ? 'active' : ''}`}
+              title="Cọ tô vùng cần LaMa xóa nền thủ công"
+            >
+              <Brush className="w-3.5 h-3.5 text-red-400" />
+              <span className="desktop-inline">Cọ LaMa</span>
+            </button>
+          </div>
+
+          {/* View Layer Segment */}
+          <div className="segmented-group">
+            <button
+              onClick={() => setViewLayer('rendered')}
+              className={`segmented-btn ${viewLayer === 'rendered' ? 'active' : ''}`}
+              title="Xem tranh đã dịch hoàn chỉnh"
+            >
+              <span>Hoàn Chỉnh</span>
+            </button>
+            <button
+              onClick={() => setViewLayer('original')}
+              className={`segmented-btn ${viewLayer === 'original' ? 'active' : ''}`}
+              title="Xem tranh gốc tiếng Nhật/Trung"
+            >
+              <span>Ảnh Gốc</span>
+            </button>
+            <button
+              onClick={() => setViewLayer('inpainted')}
+              className={`segmented-btn ${viewLayer === 'inpainted' ? 'active' : ''}`}
+              title="Xem tranh đã xóa chữ sạch"
+            >
+              <span>Đã Xóa Chữ</span>
+            </button>
+            <button
+              onClick={() => setViewLayer('split')}
+              className={`segmented-btn ${viewLayer === 'split' ? 'active' : ''}`}
+              title="So sánh Trước / Sau"
+            >
+              <Split className="w-3.5 h-3.5 text-purple-400" />
+              <span className="desktop-inline">So Sánh</span>
+            </button>
+          </div>
+
+          {/* Zoom Controls Segment */}
+          <div className="segmented-group">
+            <button
+              onClick={() => setZoom((z) => Math.max(0.1, z * 0.85))}
+              className="btn-icon"
+              title="Thu nhỏ"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setZoomPreset(1.0)}
+              className="segmented-btn font-mono text-[11px] px-1.5 desktop-inline"
+              title="Đặt 100% kích thước thực"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              onClick={() => setZoom((z) => Math.min(4.5, z * 1.15))}
+              className="btn-icon"
+              title="Phóng to"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleFitScreen}
+              className="btn-icon"
+              title="Vừa vặn màn hình"
+            >
+              <Maximize className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Dedicated Mask Brush Sub-Toolbar (When Brush is active) */}
-      {activeTool === 'brush' && (
+      {rawImageUrl && activeTool === 'brush' && (
         <div className="canvas-brush-toolbar">
           <span className="text-xs font-semibold text-red-300 flex items-center gap-1.5">
             <Brush className="w-3.5 h-3.5 text-red-400" />
@@ -713,46 +780,83 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         </div>
       )}
 
-      {/* Main Canvas Viewport */}
-      <div
-        ref={containerRef}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onContextMenu={(e) => e.preventDefault()}
-        className={`flex-1 w-full h-full overflow-hidden relative ${
-          spacePressed || isPanning ? 'cursor-grab' : activeTool === 'brush' ? 'cursor-crosshair' : 'cursor-default'
-        }`}
-      >
+      {/* Main Canvas Viewport or Empty State */}
+      {rawImageUrl ? (
         <div
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: '0 0',
-            width: imgDimensions.width,
-            height: imgDimensions.height,
-          }}
-          className="relative shadow-2xl transition-transform duration-75 select-none"
+          ref={containerRef}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onContextMenu={(e) => e.preventDefault()}
+          className={`flex-1 w-full h-full overflow-hidden relative ${
+            spacePressed || isPanning ? 'cursor-grab' : activeTool === 'brush' ? 'cursor-crosshair' : 'cursor-default'
+          }`}
         >
-          <canvas
-            ref={canvasRef}
-            className="rounded shadow-2xl border border-slate-800 bg-slate-900 block"
-          />
-          <canvas ref={maskCanvasRef} className="hidden" />
+          <div
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transformOrigin: '0 0',
+              width: imgDimensions.width,
+              height: imgDimensions.height,
+            }}
+            className="relative shadow-2xl transition-transform duration-75 select-none"
+          >
+            <canvas
+              ref={canvasRef}
+              className="rounded shadow-2xl border border-slate-800 bg-slate-900 block"
+            />
+            <canvas ref={maskCanvasRef} className="hidden" />
+          </div>
         </div>
-      </div>
+      ) : (
+        /* Empty State Screen when no image is loaded */
+        <div className="flex-1 flex items-center justify-center p-6 select-none">
+          <div className="max-w-md w-full glass-panel border border-slate-800 p-8 rounded-3xl text-center space-y-6 shadow-2xl">
+            <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-indigo-600/30 to-purple-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-xl shadow-indigo-500/10">
+              <ImagePlus className="w-10 h-10 animate-pulse" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg md:text-xl font-bold text-slate-100">
+                Manga Studio AI - Workspace
+              </h3>
+              <p className="text-xs md:text-sm text-slate-400 leading-relaxed">
+                Chọn ảnh truyện từ Thư viện điện thoại hoặc kéo thả ảnh vào đây để bắt đầu dịch tự động và chỉnh sửa kiểu chữ.
+              </p>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-sm shadow-xl shadow-indigo-500/30 transition-all active:scale-[0.98] flex items-center justify-center space-x-2"
+              >
+                <ImagePlus className="w-5 h-5" />
+                <span>📱 Chọn Ảnh Từ Thư Viện Điện Thoại</span>
+              </button>
+
+              <div className="text-[11px] text-slate-500 flex items-center justify-center space-x-2">
+                <FileImage className="w-3.5 h-3.5 text-slate-400" />
+                <span>Hỗ trợ JPG, PNG, WEBP (chọn 1 hoặc nhiều ảnh cùng lúc)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Status Hint Bar */}
-      <div className="desktop-only absolute bottom-3 left-4 z-20 items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
-        <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
-        <span>•</span>
-        <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>
-        <span>•</span>
-        <span><strong>Phím Delete:</strong> Xóa ô thoại</span>
-      </div>
+      {rawImageUrl && (
+        <div className="desktop-only absolute bottom-3 left-4 z-20 items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
+          <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
+          <span>•</span>
+          <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>
+          <span>•</span>
+          <span><strong>Phím Delete:</strong> Xóa ô thoại</span>
+        </div>
+      )}
     </div>
   );
 };

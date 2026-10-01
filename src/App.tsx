@@ -3,7 +3,8 @@ import {
   Images, 
   Type, 
   Sparkles, 
-  Download 
+  Download,
+  ImagePlus
 } from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
@@ -16,8 +17,12 @@ import {
   fetchImageList, 
   saveOutputImage, 
   saveProjectMetadata, 
-  loadProjectMetadata 
+  loadProjectMetadata,
+  deleteStoredImage,
+  clearAllStoredImages,
+  importImagesFromFiles
 } from './services/api';
+import { loadSavedColabConfig, saveStoredColabConfig } from './services/storage';
 import { 
   inpaintImageWithLaMa, 
   ocrBubbles, 
@@ -45,23 +50,34 @@ export const App: React.FC = () => {
   const [isColabModalOpen, setIsColabModalOpen] = useState<boolean>(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
 
-  // Colab & AI Config
-  const [colabConfig, setColabConfig] = useState<ColabConfig>({
-    serverUrl: '',
-    geminiApiKey: '',
-    connected: false,
-    engineMode: 'gemini',
-    targetLang: 'vi',
+  // Colab & AI Config (persisted across sessions)
+  const [colabConfig, setColabConfig] = useState<ColabConfig>(() => {
+    const saved = loadSavedColabConfig();
+    return (
+      saved || {
+        serverUrl: '',
+        geminiApiKey: '',
+        connected: false,
+        engineMode: 'gemini',
+        targetLang: 'vi',
+      }
+    );
   });
 
-  // Load images list from local backend on mount
+  // Persist ColabConfig changes
+  const handleSaveColabConfig = (newConfig: ColabConfig) => {
+    setColabConfig(newConfig);
+    saveStoredColabConfig(newConfig);
+  };
+
+  // Load images list from IndexedDB / backend on mount
   const loadImages = useCallback(async () => {
     setIsLoadingImages(true);
     const res = await fetchImageList();
     setIsLoadingImages(false);
     if (res.success && res.images.length > 0) {
       setImages(res.images);
-      if (!selectedFilename) {
+      if (!selectedFilename || !res.images.some((img) => img.filename === selectedFilename)) {
         setSelectedFilename(res.images[0].filename);
       }
     }
@@ -73,7 +89,12 @@ export const App: React.FC = () => {
 
   // Load metadata and image data whenever selectedFilename changes
   useEffect(() => {
-    if (!selectedFilename) return;
+    if (!selectedFilename) {
+      setBubbles([]);
+      setSelectedBubbleId(null);
+      setCleanedImageBase64(null);
+      return;
+    }
 
     const loadPageData = async () => {
       const metadata = await loadProjectMetadata(selectedFilename);
@@ -95,6 +116,55 @@ export const App: React.FC = () => {
 
     loadPageData();
   }, [selectedFilename]);
+
+  // Import images from Phone Gallery / File Picker / Drag & Drop
+  const handleAddImages = async (files: FileList | File[]) => {
+    setIsLoadingImages(true);
+    try {
+      const added = await importImagesFromFiles(files, images);
+      if (added.length > 0) {
+        const updatedList = [...images, ...added];
+        setImages(updatedList);
+        // Automatically select first added image if none was active
+        if (!selectedFilename) {
+          setSelectedFilename(added[0].filename);
+        }
+      }
+    } catch (err) {
+      console.error('Error importing images:', err);
+      alert('Không thể nhập một số ảnh. Vui lòng thử lại.');
+    } finally {
+      setIsLoadingImages(false);
+    }
+  };
+
+  // Delete single image
+  const handleDeleteImage = async (filename: string) => {
+    await deleteStoredImage(filename);
+    const remaining = images.filter((img) => img.filename !== filename);
+    setImages(remaining);
+
+    if (selectedFilename === filename) {
+      if (remaining.length > 0) {
+        setSelectedFilename(remaining[0].filename);
+      } else {
+        setSelectedFilename(null);
+        setBubbles([]);
+        setSelectedBubbleId(null);
+        setCleanedImageBase64(null);
+      }
+    }
+  };
+
+  // Clear all images
+  const handleClearAllImages = async () => {
+    await clearAllStoredImages();
+    setImages([]);
+    setSelectedFilename(null);
+    setBubbles([]);
+    setSelectedBubbleId(null);
+    setCleanedImageBase64(null);
+  };
 
   const currentImage = images.find((img) => img.filename === selectedFilename) || null;
 
@@ -127,23 +197,23 @@ export const App: React.FC = () => {
     });
   }, [currentImage, cleanedImageBase64, bubbles]);
 
-  // Export current page to test-case directory
+  // Export current page to device gallery / downloads & test-case directory
   const handleExportCurrent = async () => {
     if (!selectedFilename) return;
 
     const base64 = await renderCurrentPageToBase64();
     if (!base64) return;
 
-    const success = await saveOutputImage(selectedFilename, base64);
+    const success = await saveOutputImage(selectedFilename, base64, true);
     if (success) {
       await saveProjectMetadata(selectedFilename, bubbles, cleanedImageBase64 || undefined);
       // Update image item status
       setImages((prev) =>
         prev.map((img) =>
-          img.filename === selectedFilename ? { ...img, status: 'done' } : img
+          img.filename === selectedFilename ? { ...img, status: 'done', outputUrl: base64 } : img
         )
       );
-      alert(`🎉 Đã xuất thành công trang "${selectedFilename}" vào thư mục d:\\dich\\test-case!`);
+      alert(`🎉 Đã xuất và tải ảnh "${selectedFilename}" về máy thành công!`);
     } else {
       alert(`⚠️ Không thể lưu trang "${selectedFilename}". Vui lòng thử lại.`);
     }
@@ -264,8 +334,8 @@ export const App: React.FC = () => {
 
       const finalBase64 = renderCanvas.toDataURL('image/png');
 
-      // Save to test-case
-      const ok = await saveOutputImage(filename, finalBase64);
+      // Save to device and test-case
+      const ok = await saveOutputImage(filename, finalBase64, false);
       if (ok) {
         await saveProjectMetadata(filename, translated, cleaned);
       }
@@ -297,7 +367,9 @@ export const App: React.FC = () => {
         onExportCurrent={handleExportCurrent}
         onRunAutoCleanAndTranslate={handleRunAutoCleanAndTranslate}
         isProcessing={isProcessing}
-        onEngineChange={(mode: EngineMode) => setColabConfig((prev) => ({ ...prev, engineMode: mode }))}
+        onEngineChange={(mode: EngineMode) =>
+          handleSaveColabConfig({ ...colabConfig, engineMode: mode })
+        }
       />
 
       {/* Main Studio Workspace */}
@@ -322,6 +394,9 @@ export const App: React.FC = () => {
             setSelectedBubbleId(null);
           }}
           onRefreshList={loadImages}
+          onAddImages={handleAddImages}
+          onDeleteImage={handleDeleteImage}
+          onClearAllImages={handleClearAllImages}
           isLoading={isLoadingImages}
           isOpenMobile={isMobileSidebarOpen}
           onCloseMobile={() => setIsMobileSidebarOpen(false)}
@@ -346,6 +421,7 @@ export const App: React.FC = () => {
             if (selectedBubbleId === id) setSelectedBubbleId(null);
           }}
           onManualInpaintArea={handleManualInpaintArea}
+          onAddImages={handleAddImages}
         />
 
         {/* Right: Bubble Property Inspector */}
@@ -436,7 +512,7 @@ export const App: React.FC = () => {
         isOpen={isColabModalOpen}
         onClose={() => setIsColabModalOpen(false)}
         config={colabConfig}
-        onSaveConfig={setColabConfig}
+        onSaveConfig={handleSaveColabConfig}
       />
 
       {/* Batch Processing Modal */}

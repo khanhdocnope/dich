@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Images, 
   Search, 
@@ -8,7 +8,10 @@ import {
   ChevronLeft, 
   ChevronRight,
   RefreshCw,
-  X
+  X,
+  ImagePlus,
+  Trash2,
+  FolderPlus
 } from 'lucide-react';
 import { PageItem } from '../types';
 
@@ -17,6 +20,9 @@ interface SidebarProps {
   selectedFilename: string | null;
   onSelectImage: (filename: string) => void;
   onRefreshList: () => void;
+  onAddImages: (files: FileList | File[]) => void;
+  onDeleteImage?: (filename: string) => void;
+  onClearAllImages?: () => void;
   isLoading: boolean;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
@@ -27,6 +33,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   selectedFilename,
   onSelectImage,
   onRefreshList,
+  onAddImages,
+  onDeleteImage,
+  onClearAllImages,
   isLoading,
   isOpenMobile = false,
   onCloseMobile,
@@ -34,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [collapsed, setCollapsed] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'raw' | 'done'>('all');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredImages = images.filter((img) => {
     const matchesSearch = img.filename.toLowerCase().includes(searchTerm.toLowerCase());
@@ -44,33 +54,65 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const doneCount = images.filter((img) => img.status === 'done').length;
 
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      onAddImages(e.target.files);
+      // Reset input value so same files can be chosen again if needed
+      e.target.value = '';
+    }
+  };
+
+  const handleTriggerPickImages = () => {
+    fileInputRef.current?.click();
+  };
+
   return (
     <aside
       className={`sidebar-drawer ${isOpenMobile ? 'open' : ''} relative h-full glass-panel border-r border-slate-800 transition-all duration-300 flex flex-col z-20 select-none ${
         collapsed ? 'w-14' : 'w-72 sm:w-80'
       }`}
     >
+      {/* Hidden File Input for Phone Gallery / Device Storage */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileInputChange}
+        accept="image/*"
+        multiple
+        className="hidden"
+      />
+
       {/* Top Header */}
-      <div className="p-3.5 border-b border-slate-800 flex items-center justify-between shrink-0">
+      <div className="p-3 border-b border-slate-800 flex items-center justify-between shrink-0 bg-slate-900/50">
         {!collapsed && (
           <div className="flex items-center space-x-2">
             <Images className="w-4 h-4 text-indigo-400" />
             <h2 className="font-semibold text-xs tracking-wide uppercase text-slate-200">
-              Raw Materials ({images.length})
+              Thư Viện Ảnh ({images.length})
             </h2>
           </div>
         )}
         <div className="flex items-center space-x-1 ml-auto">
+          {/* Quick Add Button (Collapsed & Mobile) */}
+          <button
+            onClick={handleTriggerPickImages}
+            className="p-1.5 rounded-lg bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600 hover:text-white transition-all border border-indigo-500/30"
+            title="Chọn ảnh từ Thư viện / Thiết bị"
+          >
+            <ImagePlus className="w-3.5 h-3.5" />
+          </button>
+
           {/* Mobile Close Button */}
           {onCloseMobile && (
             <button
               onClick={onCloseMobile}
-              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors mr-1"
+              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
               title="Đóng danh sách trang"
             >
               <X className="w-4 h-4 text-slate-300" />
             </button>
           )}
+
           <button
             onClick={onRefreshList}
             disabled={isLoading}
@@ -79,6 +121,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
+
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
@@ -91,6 +134,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {!collapsed && (
         <>
+          {/* Action Bar: Add Photos Button */}
+          <div className="p-2.5 border-b border-slate-800/80 bg-slate-950/70 shrink-0 space-y-2">
+            <button
+              onClick={handleTriggerPickImages}
+              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold shadow-md shadow-indigo-500/20 flex items-center justify-center space-x-2 transition-all active:scale-[0.98]"
+            >
+              <ImagePlus className="w-4 h-4" />
+              <span>+ Chọn Ảnh Từ Thư Viện</span>
+            </button>
+
+            {images.length > 0 && onClearAllImages && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách ảnh hiện tại?')) {
+                      onClearAllImages();
+                    }
+                  }}
+                  className="text-[10.5px] text-slate-400 hover:text-red-400 transition-colors flex items-center space-x-1 py-0.5 px-1"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Xóa tất cả ({images.length})</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Search & Filter Bar */}
           <div className="p-3 border-b border-slate-800 space-y-2.5 shrink-0 bg-slate-950">
             <div className="relative">
@@ -124,7 +194,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
-                Chưa xong ({images.length - doneCount})
+                Chưa ({images.length - doneCount})
               </button>
               <button
                 onClick={() => setFilter('done')}
@@ -134,14 +204,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
-                Đã xong ({doneCount})
+                Xong ({doneCount})
               </button>
             </div>
           </div>
 
           {/* Image List */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-            {filteredImages.length === 0 ? (
+            {images.length === 0 ? (
+              <div className="text-center py-10 px-4 space-y-3">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center text-indigo-400">
+                  <ImagePlus className="w-6 h-6 animate-pulse" />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-200">Chưa có trang truyện nào</div>
+                  <div className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Chạm nút bên dưới để chọn ảnh từ bộ sưu tập điện thoại
+                  </div>
+                </div>
+                <button
+                  onClick={handleTriggerPickImages}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition-all active:scale-95"
+                >
+                  📱 Chọn Ảnh Từ Thư Viện
+                </button>
+              </div>
+            ) : filteredImages.length === 0 ? (
               <div className="text-center py-8 text-xs text-slate-500">
                 Không tìm thấy trang phù hợp
               </div>
@@ -158,10 +246,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onSelectImage(img.filename);
                       onCloseMobile?.();
                     }}
-                    className={`flex items-center space-x-3 p-2 rounded-xl cursor-pointer transition-all border ${
+                    className={`group relative flex items-center space-x-3 p-2 rounded-xl cursor-pointer transition-all border ${
                       isSelected
-                        ? 'bg-slate-800 border-indigo-500 text-white shadow-md'
-                        : 'bg-slate-900 border-slate-800 hover:bg-slate-800 text-slate-300'
+                        ? 'bg-slate-800/90 border-indigo-500 text-white shadow-md ring-1 ring-indigo-500/20'
+                        : 'bg-slate-900/80 border-slate-800/80 hover:bg-slate-800 text-slate-300'
                     }`}
                   >
                     {/* Thumbnail preview */}
@@ -180,32 +268,50 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
 
                     {/* Meta info */}
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 pr-1">
                       <div className="flex items-center justify-between">
-                        <span className="font-semibold text-xs truncate">
+                        <span className="font-semibold text-xs truncate" title={img.filename}>
                           {img.filename}
                         </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
+                        <span className="text-[10px] text-slate-500 font-mono shrink-0 ml-1">
                           #{idx + 1}
                         </span>
                       </div>
 
-                      <div className="mt-1 flex items-center space-x-1.5">
-                        {isDone ? (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-emerald-400 bg-slate-950 border border-emerald-800/60 px-1.5 py-0.5 rounded">
-                            <CheckCircle className="w-2.5 h-2.5" />
-                            <span>Đã xuất</span>
-                          </span>
-                        ) : isProgress ? (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-amber-400 bg-slate-950 border border-amber-800/60 px-1.5 py-0.5 rounded">
-                            <Clock className="w-2.5 h-2.5" />
-                            <span>Đang sửa</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-1.5 py-0.5 rounded">
-                            <FileImage className="w-2.5 h-2.5" />
-                            <span>Ảnh gốc</span>
-                          </span>
+                      <div className="mt-1 flex items-center justify-between">
+                        <div>
+                          {isDone ? (
+                            <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-emerald-400 bg-slate-950 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                              <CheckCircle className="w-2.5 h-2.5" />
+                              <span>Đã xuất</span>
+                            </span>
+                          ) : isProgress ? (
+                            <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-amber-400 bg-slate-950 border border-amber-800/60 px-1.5 py-0.5 rounded">
+                              <Clock className="w-2.5 h-2.5" />
+                              <span>Đang sửa</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-1.5 py-0.5 rounded">
+                              <FileImage className="w-2.5 h-2.5" />
+                              <span>Ảnh gốc</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Delete button per image */}
+                        {onDeleteImage && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(`Xóa trang "${img.filename}"?`)) {
+                                onDeleteImage(img.filename);
+                              }
+                            }}
+                            className="opacity-60 hover:opacity-100 p-1 text-slate-400 hover:text-red-400 hover:bg-slate-950 rounded transition-all"
+                            title="Xóa trang này"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         )}
                       </div>
                     </div>
@@ -219,7 +325,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Collapsed view icons */}
       {collapsed && (
-        <div className="flex-1 overflow-y-auto p-1 space-y-2 mt-2">
+        <div className="flex-1 overflow-y-auto p-1 space-y-2 mt-2 flex flex-col items-center">
+          <button
+            onClick={handleTriggerPickImages}
+            className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 flex items-center justify-center hover:bg-indigo-600 hover:text-white transition-all shadow"
+            title="Thêm ảnh từ thiết bị"
+          >
+            <ImagePlus className="w-4 h-4" />
+          </button>
+
           {images.map((img) => (
             <div
               key={img.filename}

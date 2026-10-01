@@ -14,8 +14,11 @@
 
 ## 🌟 Tính Năng Nổi Bật (Key Features)
 
-### 📱 1. Ứng Dụng Android Native & Giao Diện Tối Ưu Di Động (Mobile-First UI)
+### 📱 1. Ứng Dụng Android Native & Chọn Ảnh Trực Tiếp Từ Thư Viện (Photo Gallery Picker)
+- **Chọn ảnh từ Thư viện điện thoại (Phone Gallery Picker)**: Chọn 1 hoặc hàng loạt trang truyện tranh trực tiếp từ bộ sưu tập ảnh trên điện thoại / máy tính mà không cần qua server trung gian.
+- **Lưu trữ Cục bộ Siêu Tốc (Offline-first IndexedDB)**: Toàn bộ ảnh đã nạp, vị trí ô thoại, lớp xóa chữ LaMa và bản dịch được lưu trữ liên tục trên thiết bị.
 - **Đóng gói APK bằng Capacitor SDK**: Khởi chạy siêu tốc trên Android với Icon chính thức.
+- **Xuất & Tải Ảnh Trực Tiếp Về Máy (Direct Download)**: Bấm Xuất Ảnh để tải ảnh đã dịch hoàn chỉnh về thư mục Downloads/Bộ sưu tập của điện thoại.
 - **Drawer Điều Khiển Ẩn/Hiện**: Thiết kế dạng nắp trượt thông minh cho danh sách trang truyện và bảng tùy chỉnh ô thoại, không làm che khuất vùng làm việc.
 - **Thao Tác Cảm Ứng (Touch Gestures & Pan/Zoom)**: Cho phép dùng cử chỉ 2 ngón thu phóng hoặc kéo di chuyển Canvas mượt mà trên màn hình cảm ứng.
 
