@@ -86,20 +86,9 @@ export const App: React.FC = () => {
           setSelectedBubbleId(null);
         }
       } else {
-        // Initialize default sample bubble for convenient instant editing
-        const initialBubble: Bubble = {
-          id: `bubble_${Date.now()}`,
-          x: 120,
-          y: 180,
-          width: 220,
-          height: 120,
-          originalText: 'これは何ですか！？',
-          translatedText: 'Cái quái gì thế này!?',
-          style: { ...defaultTextStyle },
-          isInpainted: false,
-        };
-        setBubbles([initialBubble]);
-        setSelectedBubbleId(initialBubble.id);
+        // New page with no saved bubbles starts clean
+        setBubbles([]);
+        setSelectedBubbleId(null);
         setCleanedImageBase64(null);
       }
     };
@@ -222,19 +211,7 @@ export const App: React.FC = () => {
 
       // Check if project metadata already exists
       const existingMeta = await loadProjectMetadata(filename);
-      let pageBubbles = existingMeta?.bubbles || [
-        {
-          id: `bubble_batch_${Date.now()}`,
-          x: 100,
-          y: 150,
-          width: 240,
-          height: 120,
-          originalText: 'これは何ですか！？',
-          translatedText: 'Cái quái gì thế này!?',
-          style: { ...defaultTextStyle },
-          isInpainted: false,
-        },
-      ];
+      let pageBubbles = existingMeta?.bubbles || [];
 
       // Clean with LaMa
       const maskCanvas = document.createElement('canvas');

@@ -476,22 +476,32 @@ select:focus {
   /* Responsive Canvas Toolbars */
   .canvas-floating-toolbar {
     top: 8px;
-    padding: 4px 6px;
+    padding: 3px 6px;
     border-radius: 12px;
     gap: 4px;
-    max-width: 96vw;
+    max-width: calc(100vw - 16px);
     overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .canvas-floating-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .canvas-floating-toolbar .segmented-group {
+    padding: 2px;
+    gap: 2px;
   }
   .canvas-floating-toolbar .segmented-btn {
-    padding: 4px 6px;
+    padding: 3px 6px;
     font-size: 10px;
   }
   .canvas-brush-toolbar {
-    top: 52px;
-    padding: 6px 10px;
+    top: 50px;
+    padding: 4px 8px;
     border-radius: 10px;
     gap: 6px;
-    max-width: 96vw;
+    max-width: calc(100vw - 16px);
     flex-wrap: wrap;
     justify-content: center;
   }

@@ -52,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }`}
     >
       {/* Top Header */}
-      <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
+      <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between shrink-0">
         {!collapsed && (
           <div className="flex items-center space-x-2">
             <Images className="w-4 h-4 text-indigo-400" />
@@ -93,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {!collapsed && (
         <>
           {/* Search & Filter Bar */}
-          <div className="p-3 border-b border-slate-800/60 space-y-2.5">
+          <div className="p-3 border-b border-slate-800/60 space-y-2.5 shrink-0">
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-500" />
               <input

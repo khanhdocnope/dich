@@ -124,15 +124,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         }
       }
 
-      // Center and fit nicely on load
+      // Center and fit nicely on load with top clearance for toolbar
       if (containerRef.current) {
         const cw = containerRef.current.clientWidth;
         const ch = containerRef.current.clientHeight;
-        const scale = Math.min((cw - 80) / img.width, (ch - 80) / img.height, 0.85);
+        const scale = Math.min((cw - 30) / img.width, (ch - 110) / img.height, 0.85);
         setZoom(scale);
         setPan({
-          x: (cw - img.width * scale) / 2,
-          y: Math.max(30, (ch - img.height * scale) / 2),
+          x: Math.max(10, (cw - img.width * scale) / 2),
+          y: Math.max(55, (ch - img.height * scale) / 2),
         });
       }
     };
@@ -579,11 +579,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (!containerRef.current || !rawImgRef.current) return;
     const cw = containerRef.current.clientWidth;
     const ch = containerRef.current.clientHeight;
-    const scale = Math.min((cw - 60) / imgDimensions.width, (ch - 60) / imgDimensions.height, 1);
+    const scale = Math.min((cw - 30) / imgDimensions.width, (ch - 110) / imgDimensions.height, 1);
     setZoom(scale);
     setPan({
-      x: (cw - imgDimensions.width * scale) / 2,
-      y: (ch - imgDimensions.height * scale) / 2,
+      x: Math.max(10, (cw - imgDimensions.width * scale) / 2),
+      y: Math.max(55, (ch - imgDimensions.height * scale) / 2),
     });
   };
 
@@ -599,7 +599,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Công cụ chọn & di chuyển ô thoại (V)"
           >
             <MousePointer className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Chọn (V)</span>
+            <span className="hidden sm:inline">Chọn (V)</span>
           </button>
 
           <button
@@ -608,7 +608,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Tạo ô thoại mới trên trang truyện (B)"
           >
             <Plus className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Thêm Ô (B)</span>
+            <span className="hidden sm:inline">Thêm Ô (B)</span>
           </button>
 
           <button
@@ -617,7 +617,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Cọ tô vùng cần LaMa xóa nền thủ công"
           >
             <Brush className="w-3.5 h-3.5 text-red-400" />
-            <span>Cọ LaMa</span>
+            <span className="hidden sm:inline">Cọ LaMa</span>
           </button>
         </div>
 
@@ -626,20 +626,25 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           <button
             onClick={() => setViewLayer('rendered')}
             className={`segmented-btn ${viewLayer === 'rendered' ? 'active' : ''}`}
+            title="Xem toàn bộ tranh đã dịch hoàn chỉnh"
           >
-            <span>Hoàn Chỉnh</span>
+            <span className="hidden sm:inline">Hoàn Chỉnh</span>
+            <span className="sm:hidden">Dịch</span>
           </button>
           <button
             onClick={() => setViewLayer('original')}
             className={`segmented-btn ${viewLayer === 'original' ? 'active' : ''}`}
+            title="Xem tranh gốc tiếng Nhật/Trung"
           >
-            <span>Ảnh Gốc</span>
+            <span>Gốc</span>
           </button>
           <button
             onClick={() => setViewLayer('inpainted')}
             className={`segmented-btn ${viewLayer === 'inpainted' ? 'active' : ''}`}
+            title="Xem tranh đã xóa chữ trắng trơn"
           >
-            <span>Đã Xóa Chữ</span>
+            <span className="hidden sm:inline">Đã Xóa Chữ</span>
+            <span className="sm:hidden">Sạch</span>
           </button>
           <button
             onClick={() => setViewLayer('split')}
@@ -647,7 +652,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="So sánh Trước / Sau"
           >
             <Split className="w-3.5 h-3.5 text-purple-400" />
-            <span>So Sánh</span>
+            <span className="hidden sm:inline">So Sánh</span>
           </button>
         </div>
 
@@ -662,7 +667,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </button>
           <button
             onClick={() => setZoomPreset(1.0)}
-            className="segmented-btn font-mono text-[11px] px-1.5"
+            className="segmented-btn font-mono text-[11px] px-1.5 hidden sm:flex"
             title="Đặt 100% kích thước thực"
           >
             {Math.round(zoom * 100)}%

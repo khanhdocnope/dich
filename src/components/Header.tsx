@@ -85,8 +85,27 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
       </div>
 
-      {/* Right: Colab Status, Action Buttons */}
+      {/* Right Actions: Mobile & Desktop */}
       <div className="flex items-center space-x-1.5 sm:space-x-2.5">
+        {/* Mobile-only Engine Quick Toggle Pill */}
+        <button
+          onClick={() => onEngineChange(colabConfig.engineMode === 'gemini' ? 'uncensored' : 'gemini')}
+          className="md:hidden flex items-center space-x-1 px-2 py-1 rounded-lg border border-slate-800 bg-slate-900 text-[11px] font-medium"
+          title="Chạm để chuyển đổi chế độ AI Vision / Uncensored"
+        >
+          {colabConfig.engineMode === 'gemini' ? (
+            <>
+              <Zap className="w-3 h-3 text-yellow-300" />
+              <span className="text-indigo-300">Gemini</span>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-3 h-3 text-emerald-300" />
+              <span className="text-emerald-300">MangaOCR</span>
+            </>
+          )}
+        </button>
+
         {/* Colab Status Button */}
         <button
           onClick={onOpenColabModal}
@@ -110,17 +129,17 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* Auto Process Page */}
+        {/* Desktop-only Auto Process Page */}
         <button
           onClick={onRunAutoCleanAndTranslate}
           disabled={!currentFilename || isProcessing}
-          className={`flex items-center space-x-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-semibold btn-primary text-white ${
+          className={`hidden md:flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold btn-primary text-white ${
             !currentFilename || isProcessing ? 'opacity-50 cursor-not-allowed' : ''
           }`}
           title="Xóa chữ bằng LaMa và Dịch tự động trang hiện tại"
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span className="hidden xs:inline sm:inline">{isProcessing ? 'Đang dịch...' : 'Dịch AI'}</span>
+          <span>{isProcessing ? 'Đang xử lý AI...' : 'Tự động Dịch Trang'}</span>
         </button>
 
         {/* Batch Process All */}
@@ -133,15 +152,15 @@ export const Header: React.FC<HeaderProps> = ({
           <span>Hàng Loạt</span>
         </button>
 
-        {/* Export Current */}
+        {/* Desktop-only Export Current */}
         <button
           onClick={onExportCurrent}
           disabled={!currentFilename}
-          className="flex items-center space-x-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-all shadow-sm"
+          className="hidden md:flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-all shadow-sm"
           title="Lưu ảnh hoàn chỉnh vào d:\dich\test-case"
         >
           <Download className="w-3.5 h-3.5 text-indigo-400" />
-          <span className="hidden sm:inline">Xuất ảnh</span>
+          <span>Xuất test-case</span>
         </button>
       </div>
     </header>
