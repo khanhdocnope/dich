@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Brand & Active File */}
       <div className="flex items-center space-x-3">
         <div className="header-brand-badge">
-          <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+          <img src="/assets/app_icon.png" alt="Logo" className="w-5 h-5 rounded-md object-contain shrink-0 shadow-sm" />
           <span className="header-brand-title truncate">
             Manga Studio AI
           </span>
