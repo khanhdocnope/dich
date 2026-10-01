@@ -21,6 +21,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@capacitor/core": "^8.5.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "lucide-react": "^1.49.0",
@@ -29,6 +30,8 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.3.0",
