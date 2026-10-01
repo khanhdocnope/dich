@@ -1,0 +1,43 @@
+{
+  "name": "manga-translator-studio",
+  "version": "1.0.0",
+  "description": "AI Manga/Comic Translator Studio with LaMa Inpainting and Visual Editor",
+  "main": "server/server.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server/server.js",
+    "client": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "manga",
+    "comic",
+    "translator",
+    "lama",
+    "inpainting",
+    "ocr"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "lucide-react": "^1.49.0",
+    "multer": "^2.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
+  }
+}
