@@ -462,6 +462,76 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     setResizeHandle(null);
   };
 
+  // Touch Gesture Handling (Mobile Multi-touch pinch zoom & pan)
+  const touchStateRef = useRef<{
+    initialDist: number;
+    initialZoom: number;
+    initialPan: { x: number; y: number };
+    center: { x: number; y: number };
+  } | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const centerX = (t1.clientX + t2.clientX) / 2;
+      const centerY = (t1.clientY + t2.clientY) / 2;
+      touchStateRef.current = {
+        initialDist: dist,
+        initialZoom: zoom,
+        initialPan: { ...pan },
+        center: { x: centerX, y: centerY },
+      };
+      setIsPanning(false);
+      setIsDraggingBubble(false);
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      const fakeMouseEvent = {
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        button: 0,
+        preventDefault: () => {},
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleMouseDown(fakeMouseEvent);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2 && touchStateRef.current && containerRef.current) {
+      const t1 = e.touches[0];
+      const t2 = e.touches[1];
+      const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const centerX = (t1.clientX + t2.clientX) / 2;
+      const centerY = (t1.clientY + t2.clientY) / 2;
+
+      const scaleChange = dist / touchStateRef.current.initialDist;
+      const newZoom = Math.min(Math.max(touchStateRef.current.initialZoom * scaleChange, 0.1), 4.5);
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = touchStateRef.current.center.x - rect.left;
+      const mouseY = touchStateRef.current.center.y - rect.top;
+
+      const newPanX = mouseX - (mouseX - touchStateRef.current.initialPan.x) * (newZoom / touchStateRef.current.initialZoom) + (centerX - touchStateRef.current.center.x);
+      const newPanY = mouseY - (mouseY - touchStateRef.current.initialPan.y) * (newZoom / touchStateRef.current.initialZoom) + (centerY - touchStateRef.current.center.y);
+
+      setZoom(newZoom);
+      setPan({ x: newPanX, y: newPanY });
+    } else if (e.touches.length === 1 && !touchStateRef.current) {
+      const touch = e.touches[0];
+      const fakeMouseEvent = {
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleMouseMove(fakeMouseEvent);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStateRef.current = null;
+    handleMouseUp();
+  };
+
   // Mask Painting logic
   const paintMask = (x: number, y: number) => {
     const maskCanvas = maskCanvasRef.current;
@@ -547,7 +617,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Cọ tô vùng cần LaMa xóa nền thủ công"
           >
             <Brush className="w-3.5 h-3.5 text-red-400" />
-            <span>Cọ Xóa LaMa</span>
+            <span>Cọ LaMa</span>
           </button>
         </div>
 
@@ -654,6 +724,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         onContextMenu={(e) => e.preventDefault()}
         className={`flex-1 w-full h-full overflow-hidden relative ${
           spacePressed || isPanning ? 'cursor-grab' : activeTool === 'brush' ? 'cursor-crosshair' : 'cursor-default'
@@ -677,7 +750,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       </div>
 
       {/* Bottom Status Hint Bar */}
-      <div className="absolute bottom-2 left-4 z-20 flex items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
+      <div className="canvas-status-hint desktop-only absolute bottom-2 left-4 z-20 flex items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
         <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
         <span>•</span>
         <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>

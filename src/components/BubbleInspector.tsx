@@ -14,7 +14,8 @@ import {
   Square,
   Sparkles,
   Layers,
-  CircleDot
+  CircleDot,
+  X
 } from 'lucide-react';
 import { Bubble, TextStyle } from '../types';
 import { defaultTextStyle } from '../services/typesettingEngine';
@@ -27,6 +28,8 @@ interface BubbleInspectorProps {
   onDeleteBubble: (id: string) => void;
   onAddBubble: () => void;
   onReTranslateBubble: (bubble: Bubble) => void;
+  isOpenMobile?: boolean;
+  onCloseMobile?: () => void;
 }
 
 const FONT_OPTIONS = [
@@ -47,6 +50,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
   onDeleteBubble,
   onAddBubble,
   onReTranslateBubble,
+  isOpenMobile = false,
+  onCloseMobile,
 }) => {
   const selectedBubble = bubbles.find((b) => b.id === selectedBubbleId);
 
@@ -76,7 +81,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
   };
 
   return (
-    <aside className="w-80 h-full glass-panel border-l border-slate-800 flex flex-col z-20 select-none">
+    <aside className={`inspector-drawer ${isOpenMobile ? 'open' : ''} w-80 h-full glass-panel border-l border-slate-800 flex flex-col z-20 select-none`}>
       {/* Header */}
       <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
         <div className="flex items-center space-x-2">
@@ -85,14 +90,25 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
             Bong Bóng Thoại ({bubbles.length})
           </h2>
         </div>
-        <button
-          onClick={onAddBubble}
-          className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center space-x-1 text-xs"
-          title="Tạo thêm ô thoại mới"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Thêm Ô</span>
-        </button>
+        <div className="flex items-center space-x-1.5">
+          <button
+            onClick={onAddBubble}
+            className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center space-x-1 text-xs"
+            title="Tạo thêm ô thoại mới"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Thêm Ô</span>
+          </button>
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+              title="Đóng bảng công cụ"
+            >
+              <X className="w-4 h-4 text-slate-300" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bubble List Selector Tabs */}

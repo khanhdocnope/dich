@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { 
+  Images, 
+  Type, 
+  Sparkles, 
+  Download 
+} from 'lucide-react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { CanvasEditor } from './components/CanvasEditor';
@@ -30,6 +36,10 @@ export const App: React.FC = () => {
   // Status & Progress States
   const [isLoadingImages, setIsLoadingImages] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+
+  // Mobile Drawer States
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+  const [isMobileInspectorOpen, setIsMobileInspectorOpen] = useState<boolean>(false);
 
   // Modals
   const [isColabModalOpen, setIsColabModalOpen] = useState<boolean>(false);
@@ -315,6 +325,17 @@ export const App: React.FC = () => {
 
       {/* Main Studio Workspace */}
       <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile Backdrop Overlay */}
+        {(isMobileSidebarOpen || isMobileInspectorOpen) && (
+          <div
+            className="mobile-backdrop"
+            onClick={() => {
+              setIsMobileSidebarOpen(false);
+              setIsMobileInspectorOpen(false);
+            }}
+          />
+        )}
+
         {/* Left: Raw materials gallery */}
         <Sidebar
           images={images}
@@ -325,6 +346,8 @@ export const App: React.FC = () => {
           }}
           onRefreshList={loadImages}
           isLoading={isLoadingImages}
+          isOpenMobile={isMobileSidebarOpen}
+          onCloseMobile={() => setIsMobileSidebarOpen(false)}
         />
 
         {/* Center: Canvas Editor */}
@@ -383,8 +406,53 @@ export const App: React.FC = () => {
               );
             }
           }}
+          isOpenMobile={isMobileInspectorOpen}
+          onCloseMobile={() => setIsMobileInspectorOpen(false)}
         />
       </div>
+
+      {/* Mobile Bottom Navigation Bar */}
+      <nav className="mobile-bottom-nav">
+        <button
+          onClick={() => {
+            setIsMobileSidebarOpen((prev) => !prev);
+            setIsMobileInspectorOpen(false);
+          }}
+          className={`mobile-nav-btn ${isMobileSidebarOpen ? 'active' : ''}`}
+        >
+          <Images className="w-4 h-4 text-indigo-400" />
+          <span>Trang ({images.length})</span>
+        </button>
+
+        <button
+          onClick={handleRunAutoCleanAndTranslate}
+          disabled={!selectedFilename || isProcessing}
+          className="mobile-nav-btn primary"
+        >
+          <Sparkles className="w-4 h-4 text-yellow-300" />
+          <span>{isProcessing ? 'Đang dịch...' : 'Dịch AI'}</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setIsMobileInspectorOpen((prev) => !prev);
+            setIsMobileSidebarOpen(false);
+          }}
+          className={`mobile-nav-btn ${isMobileInspectorOpen ? 'active' : ''}`}
+        >
+          <Type className="w-4 h-4 text-emerald-400" />
+          <span>Công Cụ ({bubbles.length})</span>
+        </button>
+
+        <button
+          onClick={handleExportCurrent}
+          disabled={!selectedFilename}
+          className="mobile-nav-btn"
+        >
+          <Download className="w-4 h-4 text-slate-300" />
+          <span>Xuất Ảnh</span>
+        </button>
+      </nav>
 
       {/* Colab Configuration Modal */}
       <ColabModal

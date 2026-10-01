@@ -35,29 +35,29 @@ export const Header: React.FC<HeaderProps> = ({
   onEngineChange,
 }) => {
   return (
-    <header className="h-16 glass-header px-4 flex items-center justify-between z-30 shrink-0 select-none">
+    <header className="h-14 md:h-16 glass-header px-2.5 sm:px-4 flex items-center justify-between z-30 shrink-0 select-none">
       {/* Brand & Active File */}
-      <div className="flex items-center space-x-4">
-        <div className="flex items-center space-x-2.5 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 px-3 py-1.5 rounded-xl">
-          <Sparkles className="w-5 h-5 text-indigo-400" />
-          <span className="font-bold text-base bg-gradient-to-r from-indigo-300 via-white to-purple-300 bg-clip-text text-transparent tracking-wide">
-            Manga Studio AI
+      <div className="flex items-center space-x-2 sm:space-x-4">
+        <div className="flex items-center space-x-1.5 sm:space-x-2.5 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 px-2 sm:px-3 py-1 sm:py-1.5 rounded-xl">
+          <Sparkles className="w-4 h-4 text-indigo-400 shrink-0" />
+          <span className="font-bold text-sm sm:text-base bg-gradient-to-r from-indigo-300 via-white to-purple-300 bg-clip-text text-transparent tracking-wide truncate">
+            Manga AI
           </span>
-          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-            LaMa Inpaint
+          <span className="hidden sm:inline text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+            LaMa
           </span>
         </div>
 
         {currentFilename && (
-          <div className="hidden md:flex items-center space-x-2 text-xs text-slate-400 bg-slate-900/60 border border-slate-800 px-3 py-1.5 rounded-lg">
+          <div className="hidden lg:flex items-center space-x-2 text-xs text-slate-400 bg-slate-900/60 border border-slate-800 px-3 py-1.5 rounded-lg">
             <FolderOpen className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-slate-200 font-medium">{currentFilename}</span>
+            <span className="text-slate-200 font-medium truncate max-w-[120px]">{currentFilename}</span>
           </div>
         )}
       </div>
 
-      {/* Center: Engine Mode Switcher */}
-      <div className="flex items-center space-x-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800 text-xs">
+      {/* Center: Engine Mode Switcher (Desktop / Tablet) */}
+      <div className="hidden md:flex items-center space-x-1 bg-slate-900/80 p-1 rounded-xl border border-slate-800 text-xs">
         <button
           onClick={() => onEngineChange('gemini')}
           className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
@@ -81,26 +81,27 @@ export const Header: React.FC<HeaderProps> = ({
           title="Chế độ không kiểm duyệt (Manga-OCR Offline + DeepL/Google) cho truyện 18+/nhạy cảm"
         >
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
-          <span>Uncensored (Manga-OCR)</span>
+          <span>Uncensored</span>
         </button>
       </div>
 
       {/* Right: Colab Status, Action Buttons */}
-      <div className="flex items-center space-x-2.5">
+      <div className="flex items-center space-x-1.5 sm:space-x-2.5">
         {/* Colab Status Button */}
         <button
           onClick={onOpenColabModal}
-          className={`flex items-center space-x-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
+          className={`flex items-center space-x-1.5 px-2 sm:px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
             colabConfig.connected
               ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300 hover:bg-emerald-900/50'
               : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:border-slate-700'
           }`}
+          title={colabConfig.connected ? `Đã kết nối GPU: ${colabConfig.gpuName || 'OK'}` : 'Chưa kết nối Colab GPU'}
         >
           <Server className="w-3.5 h-3.5" />
-          <span>
+          <span className="hidden sm:inline">
             {colabConfig.connected
-              ? `Colab: ${colabConfig.gpuName || 'GPU Active'}`
-              : 'Kết nối Colab GPU'}
+              ? `Colab: ${colabConfig.gpuName || 'GPU'}`
+              : 'Colab GPU'}
           </span>
           {colabConfig.connected ? (
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -113,34 +114,34 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           onClick={onRunAutoCleanAndTranslate}
           disabled={!currentFilename || isProcessing}
-          className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold btn-primary text-white ${
+          className={`flex items-center space-x-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-semibold btn-primary text-white ${
             !currentFilename || isProcessing ? 'opacity-50 cursor-not-allowed' : ''
           }`}
           title="Xóa chữ bằng LaMa và Dịch tự động trang hiện tại"
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span>{isProcessing ? 'Đang xử lý AI...' : 'Tự động Dịch Trang'}</span>
+          <span className="hidden xs:inline sm:inline">{isProcessing ? 'Đang dịch...' : 'Dịch AI'}</span>
         </button>
 
         {/* Batch Process All */}
         <button
           onClick={onOpenBatchModal}
-          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 transition-all"
+          className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 transition-all"
           title="Chạy dịch hàng loạt tất cả ảnh từ raw materials ra test-case"
         >
           <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
-          <span className="hidden sm:inline">Dịch Hàng Loạt</span>
+          <span>Hàng Loạt</span>
         </button>
 
         {/* Export Current */}
         <button
           onClick={onExportCurrent}
           disabled={!currentFilename}
-          className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-all shadow-sm"
+          className="flex items-center space-x-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition-all shadow-sm"
           title="Lưu ảnh hoàn chỉnh vào d:\dich\test-case"
         >
           <Download className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Xuất test-case</span>
+          <span className="hidden sm:inline">Xuất ảnh</span>
         </button>
       </div>
     </header>

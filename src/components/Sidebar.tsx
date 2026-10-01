@@ -8,7 +8,8 @@ import {
   ChevronLeft, 
   ChevronRight,
   RefreshCw,
-  FolderSync
+  FolderSync,
+  X
 } from 'lucide-react';
 import { PageItem } from '../types';
 
@@ -18,6 +19,8 @@ interface SidebarProps {
   onSelectImage: (filename: string) => void;
   onRefreshList: () => void;
   isLoading: boolean;
+  isOpenMobile?: boolean;
+  onCloseMobile?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -26,6 +29,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectImage,
   onRefreshList,
   isLoading,
+  isOpenMobile = false,
+  onCloseMobile,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -42,7 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`relative h-full glass-panel border-r border-slate-800 transition-all duration-300 flex flex-col z-20 select-none ${
+      className={`sidebar-drawer ${isOpenMobile ? 'open' : ''} relative h-full glass-panel border-r border-slate-800 transition-all duration-300 flex flex-col z-20 select-none ${
         collapsed ? 'w-14' : 'w-72 sm:w-80'
       }`}
     >
@@ -57,6 +62,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
         <div className="flex items-center space-x-1 ml-auto">
+          {/* Mobile Close Button */}
+          {onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors mr-1"
+              title="Đóng danh sách trang"
+            >
+              <X className="w-4 h-4 text-slate-300" />
+            </button>
+          )}
           <button
             onClick={onRefreshList}
             disabled={isLoading}
@@ -67,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
             title={collapsed ? 'Mở rộng thư viện' : 'Thu gọn'}
           >
             {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
@@ -140,7 +155,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 return (
                   <div
                     key={img.filename}
-                    onClick={() => onSelectImage(img.filename)}
+                    onClick={() => {
+                      onSelectImage(img.filename);
+                      onCloseMobile?.();
+                    }}
                     className={`flex items-center space-x-3 p-2 rounded-xl cursor-pointer transition-all border ${
                       isSelected
                         ? 'bg-indigo-600/15 border-indigo-500/50 text-white shadow-sm'
