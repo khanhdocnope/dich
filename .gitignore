@@ -7,6 +7,12 @@ dist/
 build/
 out/
 
+# Image & Data Directories
+raw materials/
+test-case/
+.metadata/
+.project_data/
+
 # Local env & logs
 .env
 .env.local
@@ -26,7 +32,3 @@ big-lama.pt
 # OS metadata
 .DS_Store
 Thumbs.db
-
-# Project local caches
-.metadata/
-.project_data/
