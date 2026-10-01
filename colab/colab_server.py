@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"🔥 Running AI Server on device: {device}")
+print(f"Running AI Server on device: {device}")
 
 # Standalone LaMa Loader (TorchScript direct)
 class StandaloneLama:
