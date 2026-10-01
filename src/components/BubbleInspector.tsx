@@ -33,13 +33,16 @@ interface BubbleInspectorProps {
 }
 
 const FONT_OPTIONS = [
-  { label: 'Comic Neue (Manga Chuẩn)', value: "'Comic Neue', cursive, sans-serif" },
-  { label: 'Mali (Nét vẽ tay Manga)', value: "'Mali', cursive, sans-serif" },
-  { label: 'Nunito (Bo tròn hiện đại)', value: "'Nunito', sans-serif" },
-  { label: 'Bangers (Hành động mạnh)', value: "'Bangers', cursive" },
-  { label: 'Patrick Hand (Viết tay)', value: "'Patrick Hand', cursive" },
-  { label: 'Montserrat (Đậm nét)', value: "'Montserrat', sans-serif" },
-  { label: 'Inter (Hiện đại sạch sẽ)', value: "'Inter', sans-serif" },
+  { label: 'Nunito (Manga Bo Tròn Việt Hóa 100%)', value: "'Nunito', sans-serif" },
+  { label: 'Be Vietnam Pro (Chuẩn Việt Hóa Đội Dịch)', value: "'Be Vietnam Pro', sans-serif" },
+  { label: 'Itim (Nét Bút Tay Manga Việt Hóa)', value: "'Itim', cursive, sans-serif" },
+  { label: 'Pangolin (Dễ Thương / Truyện Hài)', value: "'Pangolin', cursive, sans-serif" },
+  { label: 'Balsamiq Sans (Phong Cách Manga Trẻ)', value: "'Balsamiq Sans', cursive, sans-serif" },
+  { label: 'Mali (Chữ Vẽ Tay Manga Việt Hóa)', value: "'Mali', cursive, sans-serif" },
+  { label: 'Comfortaa (Bo Tròn Nhẹ Nhàng)', value: "'Comfortaa', cursive, sans-serif" },
+  { label: 'Saira (Chữ Hét Lớn / Kịch Tính)', value: "'Saira Semi Condensed', sans-serif" },
+  { label: 'Montserrat (Chữ Đậm Khí Thế)', value: "'Montserrat', sans-serif" },
+  { label: 'Inter (Hiện Đại Sạch Sẽ)', value: "'Inter', sans-serif" },
 ];
 
 export const BubbleInspector: React.FC<BubbleInspectorProps> = ({

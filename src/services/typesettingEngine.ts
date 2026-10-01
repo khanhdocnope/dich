@@ -1,7 +1,7 @@
 import { Bubble, TextStyle } from '../types';
 
 export const defaultTextStyle: TextStyle = {
-  fontFamily: "'Comic Neue', 'Mali', 'Nunito', sans-serif",
+  fontFamily: "'Nunito', 'Be Vietnam Pro', sans-serif",
   fontSize: 18,
   autoFontSize: true,
   fontWeight: '700',
