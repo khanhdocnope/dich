@@ -3,19 +3,13 @@ import {
   ZoomIn, 
   ZoomOut, 
   Maximize, 
-  Layers, 
-  Eye, 
   Brush, 
   MousePointer, 
   Plus, 
-  Eraser, 
   Split, 
-  Move,
-  RotateCcw,
-  Square,
   Sparkles
 } from 'lucide-react';
-import { Bubble, TextStyle } from '../types';
+import { Bubble } from '../types';
 import { renderBubbleOnCanvas, defaultTextStyle } from '../services/typesettingEngine';
 
 interface CanvasEditorProps {
@@ -46,7 +40,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // View & Transform States
-  const [zoom, setZoom] = useState<number>(0.6);
+  const [zoom, setZoom] = useState<number>(0.8);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [startPan, setStartPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -124,15 +118,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         }
       }
 
-      // Center and fit nicely on load with top clearance for toolbar
+      // Center and fit nicely on load
       if (containerRef.current) {
         const cw = containerRef.current.clientWidth;
         const ch = containerRef.current.clientHeight;
-        const scale = Math.min((cw - 30) / img.width, (ch - 110) / img.height, 0.85);
+        const scale = Math.min((cw - 40) / img.width, (ch - 60) / img.height, 1.0);
         setZoom(scale);
         setPan({
           x: Math.max(10, (cw - img.width * scale) / 2),
-          y: Math.max(55, (ch - img.height * scale) / 2),
+          y: Math.max(20, (ch - img.height * scale) / 2),
         });
       }
     };
@@ -282,7 +276,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Pan adjustment so zoom centers on mouse position
     const newPanX = mouseX - (mouseX - pan.x) * (newZoom / zoom);
     const newPanY = mouseY - (mouseY - pan.y) * (newZoom / zoom);
 
@@ -292,7 +285,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Mouse Down (Drag, Resize, Brush, Pan, Add)
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Middle click (button 1), Right click (button 2) or Space held -> Pan
     if (e.button === 1 || e.button === 2 || spacePressed) {
       e.preventDefault();
       setIsPanning(true);
@@ -379,7 +371,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         });
       } else {
         onSelectBubble(null);
-        // Start background pan if clicked on empty space
         setIsPanning(true);
         setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       }
@@ -462,7 +453,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     setResizeHandle(null);
   };
 
-  // Touch Gesture Handling (Mobile Multi-touch pinch zoom & pan)
+  // Touch Gesture Handling
   const touchStateRef = useRef<{
     initialDist: number;
     initialZoom: number;
@@ -499,6 +490,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
     if (e.touches.length === 2 && touchStateRef.current && containerRef.current) {
+      e.preventDefault();
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
@@ -579,11 +571,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (!containerRef.current || !rawImgRef.current) return;
     const cw = containerRef.current.clientWidth;
     const ch = containerRef.current.clientHeight;
-    const scale = Math.min((cw - 30) / imgDimensions.width, (ch - 110) / imgDimensions.height, 1);
+    const scale = Math.min((cw - 40) / imgDimensions.width, (ch - 60) / imgDimensions.height, 1.2);
     setZoom(scale);
     setPan({
       x: Math.max(10, (cw - imgDimensions.width * scale) / 2),
-      y: Math.max(55, (ch - imgDimensions.height * scale) / 2),
+      y: Math.max(20, (ch - imgDimensions.height * scale) / 2),
     });
   };
 
@@ -599,7 +591,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Công cụ chọn & di chuyển ô thoại (V)"
           >
             <MousePointer className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="hidden sm:inline">Chọn (V)</span>
+            <span className="desktop-inline">Chọn (V)</span>
           </button>
 
           <button
@@ -608,7 +600,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Tạo ô thoại mới trên trang truyện (B)"
           >
             <Plus className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">Thêm Ô (B)</span>
+            <span className="desktop-inline">Thêm Ô (B)</span>
           </button>
 
           <button
@@ -617,7 +609,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="Cọ tô vùng cần LaMa xóa nền thủ công"
           >
             <Brush className="w-3.5 h-3.5 text-red-400" />
-            <span className="hidden sm:inline">Cọ LaMa</span>
+            <span className="desktop-inline">Cọ LaMa</span>
           </button>
         </div>
 
@@ -626,25 +618,23 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           <button
             onClick={() => setViewLayer('rendered')}
             className={`segmented-btn ${viewLayer === 'rendered' ? 'active' : ''}`}
-            title="Xem toàn bộ tranh đã dịch hoàn chỉnh"
+            title="Xem tranh đã dịch hoàn chỉnh"
           >
-            <span className="hidden sm:inline">Hoàn Chỉnh</span>
-            <span className="sm:hidden">Dịch</span>
+            <span>Hoàn Chỉnh</span>
           </button>
           <button
             onClick={() => setViewLayer('original')}
             className={`segmented-btn ${viewLayer === 'original' ? 'active' : ''}`}
             title="Xem tranh gốc tiếng Nhật/Trung"
           >
-            <span>Gốc</span>
+            <span>Ảnh Gốc</span>
           </button>
           <button
             onClick={() => setViewLayer('inpainted')}
             className={`segmented-btn ${viewLayer === 'inpainted' ? 'active' : ''}`}
-            title="Xem tranh đã xóa chữ trắng trơn"
+            title="Xem tranh đã xóa chữ sạch"
           >
-            <span className="hidden sm:inline">Đã Xóa Chữ</span>
-            <span className="sm:hidden">Sạch</span>
+            <span>Đã Xóa Chữ</span>
           </button>
           <button
             onClick={() => setViewLayer('split')}
@@ -652,7 +642,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             title="So sánh Trước / Sau"
           >
             <Split className="w-3.5 h-3.5 text-purple-400" />
-            <span className="hidden sm:inline">So Sánh</span>
+            <span className="desktop-inline">So Sánh</span>
           </button>
         </div>
 
@@ -667,7 +657,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </button>
           <button
             onClick={() => setZoomPreset(1.0)}
-            className="segmented-btn font-mono text-[11px] px-1.5 hidden sm:flex"
+            className="segmented-btn font-mono text-[11px] px-1.5 desktop-inline"
             title="Đặt 100% kích thước thực"
           >
             {Math.round(zoom * 100)}%
@@ -714,7 +704,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </button>
           <button
             onClick={handleApplyMaskInpaint}
-            className="px-3.5 py-1 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg text-xs shadow-md transition-all flex items-center gap-1"
+            className="btn-primary"
+            style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>Chạy LaMa Xóa Vùng Này</span>
@@ -755,7 +746,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       </div>
 
       {/* Bottom Status Hint Bar */}
-      <div className="canvas-status-hint desktop-only absolute bottom-2 left-4 z-20 flex items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
+      <div className="desktop-only absolute bottom-3 left-4 z-20 items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
         <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
         <span>•</span>
         <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>

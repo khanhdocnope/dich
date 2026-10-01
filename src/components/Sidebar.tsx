@@ -8,7 +8,6 @@ import {
   ChevronLeft, 
   ChevronRight,
   RefreshCw,
-  FolderSync,
   X
 } from 'lucide-react';
 import { PageItem } from '../types';
@@ -52,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }`}
     >
       {/* Top Header */}
-      <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between shrink-0">
+      <div className="p-3.5 border-b border-slate-800 flex items-center justify-between shrink-0">
         {!collapsed && (
           <div className="flex items-center space-x-2">
             <Images className="w-4 h-4 text-indigo-400" />
@@ -66,7 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {onCloseMobile && (
             <button
               onClick={onCloseMobile}
-              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors mr-1"
+              className="mobile-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors mr-1"
               title="Đóng danh sách trang"
             >
               <X className="w-4 h-4 text-slate-300" />
@@ -75,14 +74,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={onRefreshList}
             disabled={isLoading}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
             title="Làm mới danh sách ảnh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
             title={collapsed ? 'Mở rộng thư viện' : 'Thu gọn'}
           >
             {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
@@ -93,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {!collapsed && (
         <>
           {/* Search & Filter Bar */}
-          <div className="p-3 border-b border-slate-800/60 space-y-2.5 shrink-0">
+          <div className="p-3 border-b border-slate-800 space-y-2.5 shrink-0 bg-slate-950">
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-slate-500" />
               <input
@@ -101,7 +100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 placeholder="Tìm trang (VD: 02, 15)..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-slate-900/90 border border-slate-800 text-xs rounded-lg pl-8 pr-3 py-1.5 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500/50"
+                className="w-full bg-slate-900 border border-slate-800 text-xs rounded-lg pl-8 pr-3 py-1.5 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
               />
             </div>
 
@@ -111,7 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setFilter('all')}
                 className={`flex-1 py-1 rounded-md transition-all font-medium text-center ${
                   filter === 'all'
-                    ? 'bg-slate-800 text-slate-200 font-semibold shadow-sm'
+                    ? 'bg-slate-800 text-slate-200 font-semibold shadow-sm border border-slate-700'
                     : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
@@ -121,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setFilter('raw')}
                 className={`flex-1 py-1 rounded-md transition-all font-medium text-center ${
                   filter === 'raw'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    ? 'bg-slate-800 text-amber-300 font-semibold border border-amber-500/40'
                     : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
@@ -131,7 +130,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setFilter('done')}
                 className={`flex-1 py-1 rounded-md transition-all font-medium text-center ${
                   filter === 'done'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    ? 'bg-slate-800 text-emerald-300 font-semibold border border-emerald-500/40'
                     : 'text-slate-400 hover:text-slate-300'
                 }`}
               >
@@ -161,8 +160,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     }}
                     className={`flex items-center space-x-3 p-2 rounded-xl cursor-pointer transition-all border ${
                       isSelected
-                        ? 'bg-indigo-600/15 border-indigo-500/50 text-white shadow-sm'
-                        : 'bg-slate-900/40 border-slate-800/80 hover:bg-slate-800/60 text-slate-300'
+                        ? 'bg-slate-800 border-indigo-500 text-white shadow-md'
+                        : 'bg-slate-900 border-slate-800 hover:bg-slate-800 text-slate-300'
                     }`}
                   >
                     {/* Thumbnail preview */}
@@ -193,17 +192,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                       <div className="mt-1 flex items-center space-x-1.5">
                         {isDone ? (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1.5 py-0.5 rounded">
+                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-emerald-400 bg-slate-950 border border-emerald-800/60 px-1.5 py-0.5 rounded">
                             <CheckCircle className="w-2.5 h-2.5" />
                             <span>Đã xuất</span>
                           </span>
                         ) : isProgress ? (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-amber-400 bg-amber-950/60 border border-amber-800/60 px-1.5 py-0.5 rounded">
+                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-amber-400 bg-slate-950 border border-amber-800/60 px-1.5 py-0.5 rounded">
                             <Clock className="w-2.5 h-2.5" />
                             <span>Đang sửa</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-slate-400 bg-slate-800/60 px-1.5 py-0.5 rounded">
+                          <span className="inline-flex items-center space-x-1 text-[10px] font-medium text-slate-400 bg-slate-950 border border-slate-800 px-1.5 py-0.5 rounded">
                             <FileImage className="w-2.5 h-2.5" />
                             <span>Ảnh gốc</span>
                           </span>
