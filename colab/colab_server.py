@@ -31,21 +31,35 @@ app.add_middleware(
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Running AI Server on device: {device}")
 
-# Standalone LaMa Loader (TorchScript direct)
-class StandaloneLama:
+# Standalone LaMa Manga ONNX Loader (Optimized for Manga Inpainting)
+class LamaMangaOnnx:
     def __init__(self, dev="cuda"):
-        self.dev = torch.device(dev if torch.cuda.is_available() else "cpu")
-        model_path = os.path.join(os.path.dirname(__file__), "big-lama.pt") if "__file__" in globals() else "big-lama.pt"
+        model_path = os.path.join(os.path.dirname(__file__), "lama-manga.onnx") if "__file__" in globals() else "lama-manga.onnx"
         if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
-            print("⏳ Downloading LaMa TorchScript model (big-lama.pt ~196MB)...")
-            url = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
+            print("⏳ Downloading lama-manga-onnx model (~200MB-400MB)...")
+            url = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
             urllib.request.urlretrieve(url, model_path)
-            print("✅ LaMa model downloaded successfully!")
+            print("✅ lama-manga-onnx model downloaded successfully!")
         
-        print("⏳ Loading LaMa into memory...")
-        self.model = torch.jit.load(model_path, map_location=self.dev)
-        self.model.eval()
-        print("✅ LaMa Inpainting model ready!")
+        print("⏳ Loading lama-manga-onnx into ONNX Runtime...")
+        try:
+            import onnxruntime as ort
+            available = ort.get_available_providers()
+            providers = []
+            if dev == "cuda" and "CUDAExecutionProvider" in available:
+                providers.append("CUDAExecutionProvider")
+            if "CPUExecutionProvider" in available:
+                providers.append("CPUExecutionProvider")
+            if not providers:
+                providers = available
+            print(f"ONNX Providers: {providers}")
+            self.session = ort.InferenceSession(model_path, providers=providers)
+            self.input_names = [inp.name for inp in self.session.get_inputs()]
+            self.output_name = self.session.get_outputs()[0].name
+            print(f"✅ lama-manga-onnx Inpainting model ready! (Inputs: {self.input_names})")
+        except Exception as e:
+            print(f"⚠️ Error initializing ONNX Runtime for lama-manga-onnx: {e}")
+            raise e
 
     def __call__(self, img: Image.Image, mask: Image.Image) -> Image.Image:
         orig_w, orig_h = img.size
@@ -56,16 +70,21 @@ class StandaloneLama:
         mask_resized = mask.resize((mod_w, mod_h), Image.Resampling.NEAREST).convert("L")
 
         img_np = np.array(img_resized).astype(np.float32) / 255.0
-        mask_np = np.array(mask_resized).astype(np.float32) / 255.0
-        mask_np = (mask_np > 0.5).astype(np.float32)
+        img_np = np.transpose(img_np, (2, 0, 1))
+        img_np = np.expand_dims(img_np, axis=0)
 
-        img_t = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).to(self.dev)
-        mask_t = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0).to(self.dev)
+        mask_np = (np.array(mask_resized).astype(np.float32) / 255.0 > 0.5).astype(np.float32)
+        mask_np = np.expand_dims(mask_np, axis=(0, 1))
 
-        with torch.no_grad():
-            res_t = self.model(img_t, mask_t)
+        inputs = {
+            self.input_names[0]: img_np,
+            self.input_names[1]: mask_np
+        }
+        outputs = self.session.run([self.output_name], inputs)
+        res_np = outputs[0][0]
+        if res_np.shape[0] == 3:
+            res_np = np.transpose(res_np, (1, 2, 0))
 
-        res_np = res_t[0].permute(1, 2, 0).detach().cpu().numpy()
         res_np = np.clip(res_np * 255.0, 0, 255).astype(np.uint8)
         return Image.fromarray(res_np).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
 
@@ -75,8 +94,9 @@ mocr = None
 def get_lama():
     global lama
     if lama is None:
-        lama = StandaloneLama(dev=device)
+        lama = LamaMangaOnnx(dev=device)
     return lama
+
 
 def get_mocr():
     global mocr
