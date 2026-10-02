@@ -41,54 +41,23 @@ export const inpaintImageWithLaMa = async (
         if (data.cleanedImageBase64) {
           return data.cleanedImageBase64;
         }
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.error('Colab inpaint server error:', res.status, errText);
+        alert(`⚠️ Server AI LaMa báo lỗi (${res.status}): ${errText || 'Không thể xử lý'}`);
       }
-    } catch (e) {
-      console.warn('Colab Inpaint failed, falling back to local simulation:', e);
+    } catch (e: any) {
+      console.error('Colab Inpaint connection failed:', e);
+      alert(`⚠️ Không thể kết nối đến Colab AI Server: ${e.message || 'Lỗi mạng'}\n👉 Vui lòng kiểm tra lại link Server URL ở nút "Colab GPU".`);
     }
+  } else {
+    alert('⚠️ Bạn chưa kết nối Colab AI Server!\n👉 Hãy bấm vào nút "Colab GPU" ở trên thanh công cụ, mở Google Colab và dán URL vào để mô hình lama-manga-onnx tái tạo tranh.');
   }
 
-  // Fallback: Client-side clean (overlay white/soft fill on masked regions)
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return resolve(imageBase64);
-
-      ctx.drawImage(img, 0, 0);
-
-      const maskImg = new Image();
-      maskImg.crossOrigin = 'anonymous';
-      maskImg.onload = () => {
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = img.width;
-        maskCanvas.height = img.height;
-        const maskCtx = maskCanvas.getContext('2d');
-        if (!maskCtx) return resolve(canvas.toDataURL('image/png'));
-
-        maskCtx.drawImage(maskImg, 0, 0);
-        const maskData = maskCtx.getImageData(0, 0, img.width, img.height);
-        const imgData = ctx.getImageData(0, 0, img.width, img.height);
-
-        // Fill white/background average on mask pixels
-        for (let i = 0; i < maskData.data.length; i += 4) {
-          if (maskData.data[i] > 128) {
-            imgData.data[i] = 255;
-            imgData.data[i + 1] = 255;
-            imgData.data[i + 2] = 255;
-          }
-        }
-        ctx.putImageData(imgData, 0, 0);
-        resolve(canvas.toDataURL('image/png'));
-      };
-      maskImg.src = maskBase64;
-    };
-    img.src = imageBase64;
-  });
+  // If server unavailable, return original image intact (do NOT fill white!)
+  return imageBase64;
 };
+
 
 export const ocrBubbles = async (
   config: ColabConfig,

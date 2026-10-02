@@ -10,7 +10,10 @@ import {
   Sparkles,
   ImagePlus,
   UploadCloud,
-  FileImage
+  FileImage,
+  Undo2,
+  Redo2,
+  RotateCcw
 } from 'lucide-react';
 import { Bubble } from '../types';
 import { renderBubbleOnCanvas, defaultTextStyle } from '../services/typesettingEngine';
@@ -26,6 +29,11 @@ interface CanvasEditorProps {
   onDeleteBubble: (id: string) => void;
   onManualInpaintArea?: (maskBase64: string) => void;
   onAddImages?: (files: FileList | File[]) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onResetCleaned?: () => void;
 }
 
 export const CanvasEditor: React.FC<CanvasEditorProps> = ({
@@ -39,7 +47,13 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   onDeleteBubble,
   onManualInpaintArea,
   onAddImages,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
+  onResetCleaned,
 }) => {
+
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,14 +90,33 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const cleanedImgRef = useRef<HTMLImageElement | null>(null);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number }>({ width: 800, height: 1200 });
 
-  // Keyboard Spacebar for Pan & Delete Shortcut
+  // Keyboard Shortcuts (Space for Pan, Delete for Bubble, Ctrl+Z for Undo, Ctrl+Y for Redo)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName);
+      
+      if (!isInput && (e.ctrlKey || e.metaKey)) {
+        if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            onRedo?.();
+          } else {
+            onUndo?.();
+          }
+          return;
+        }
+        if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          onRedo?.();
+          return;
+        }
+      }
+
+      if (e.code === 'Space' && !isInput) {
         setSpacePressed(true);
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedBubbleId && !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        if (selectedBubbleId && !isInput) {
           onDeleteBubble(selectedBubbleId);
         }
       }
@@ -98,6 +131,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         setIsPanning(false);
       }
     };
+
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
@@ -732,6 +766,36 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             </button>
           </div>
 
+          {/* History Segment (Undo / Redo / Reset) */}
+          <div className="segmented-group">
+            <button
+              onClick={onUndo}
+              disabled={!canUndo}
+              className="btn-icon disabled:opacity-30"
+              title="Hoàn tác thao tác trước (Ctrl + Z)"
+            >
+              <Undo2 className="w-3.5 h-3.5 text-indigo-300" />
+            </button>
+            <button
+              onClick={onRedo}
+              disabled={!canRedo}
+              className="btn-icon disabled:opacity-30"
+              title="Làm lại thao tác vừa hoàn tác (Ctrl + Y)"
+            >
+              <Redo2 className="w-3.5 h-3.5 text-indigo-300" />
+            </button>
+            {cleanedImageBase64 && onResetCleaned && (
+              <button
+                onClick={onResetCleaned}
+                className="segmented-btn text-[11px] text-amber-300 hover:text-amber-200"
+                title="Khôi phục lại ảnh gốc ban đầu"
+              >
+                <RotateCcw className="w-3 h-3 text-amber-400 mr-1" />
+                <span className="desktop-inline">Khôi Phục Gốc</span>
+              </button>
+            )}
+          </div>
+
           {/* Zoom Controls Segment */}
           <div className="segmented-group">
             <button
@@ -768,7 +832,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
       {/* Dedicated Mask Brush Sub-Toolbar (When Brush is active) */}
       {rawImageUrl && activeTool === 'brush' && (
-        <div className="canvas-brush-toolbar">
+        <div className="canvas-brush-toolbar flex-wrap">
           <span className="text-xs font-semibold text-red-300 flex items-center gap-1.5">
             <Brush className="w-3.5 h-3.5 text-red-400" />
             <span>Cỡ cọ:</span>
@@ -789,6 +853,18 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           >
             Xóa nét vẽ
           </button>
+
+          {canUndo && (
+            <button
+              onClick={onUndo}
+              className="px-2.5 py-1 bg-indigo-950/60 border border-indigo-700/60 hover:bg-indigo-900 text-indigo-300 rounded-lg text-xs transition-all flex items-center space-x-1"
+              title="Hoàn tác vết xóa trước (Ctrl + Z)"
+            >
+              <Undo2 className="w-3 h-3" />
+              <span>Hoàn Tác</span>
+            </button>
+          )}
+
           <button
             onClick={handleApplyMaskInpaint}
             className="btn-primary"
@@ -799,6 +875,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           </button>
         </div>
       )}
+
 
       {/* Main Canvas Viewport or Empty State */}
       {rawImageUrl ? (

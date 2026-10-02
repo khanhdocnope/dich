@@ -7,7 +7,11 @@ import {
   ShieldCheck, 
   Zap, 
   FolderOpen,
-  FolderCheck
+  FolderCheck,
+  Undo2,
+  Redo2,
+  Eraser,
+  Languages
 } from 'lucide-react';
 import { ColabConfig, EngineMode } from '../types';
 
@@ -19,7 +23,13 @@ interface HeaderProps {
   onOpenBatchModal: () => void;
   onOpenOutputModal?: () => void;
   onExportCurrent: () => void;
+  onRunAutoCleanOnly?: () => void;
+  onRunTranslateOnly?: () => void;
   onRunAutoCleanAndTranslate: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   isProcessing: boolean;
   onEngineChange: (mode: EngineMode) => void;
 }
@@ -32,10 +42,17 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenBatchModal,
   onOpenOutputModal,
   onExportCurrent,
+  onRunAutoCleanOnly,
+  onRunTranslateOnly,
   onRunAutoCleanAndTranslate,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
   isProcessing,
   onEngineChange,
 }) => {
+
 
   return (
     <header className="h-14 md:h-16 glass-header px-3 md:px-5 flex items-center justify-between z-30 shrink-0 select-none">
@@ -102,6 +119,28 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
+        {/* Undo / Redo buttons */}
+        {onUndo && (
+          <div className="flex items-center space-x-1 border-r border-slate-800 pr-2 mr-1">
+            <button
+              onClick={onUndo}
+              disabled={!canUndo}
+              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-all"
+              title="Hoàn tác thao tác trước (Ctrl + Z)"
+            >
+              <Undo2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onRedo}
+              disabled={!canRedo}
+              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-all"
+              title="Làm lại (Ctrl + Y)"
+            >
+              <Redo2 className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* Output Folder Settings */}
         {onOpenOutputModal && (
           <button
@@ -114,17 +153,17 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        {/* Colab Status Button */}
+        {/* Colab Status Button (LaMa Manga AI) */}
         <button
           onClick={onOpenColabModal}
           className={`btn-colab ${colabConfig.connected ? 'connected' : ''}`}
-          title={colabConfig.connected ? `Đã kết nối GPU: ${colabConfig.gpuName || 'OK'}` : 'Chưa kết nối Colab GPU'}
+          title={colabConfig.connected ? `Đã kết nối GPU AI LaMa: ${colabConfig.gpuName || 'OK'}` : 'Chưa kết nối Colab GPU (Xóa chữ LaMa)'}
         >
           <Server className="w-3.5 h-3.5" />
           <span className="desktop-inline">
             {colabConfig.connected
               ? `Colab: ${colabConfig.gpuName || 'GPU'}`
-              : 'Colab GPU'}
+              : 'Colab (LaMa AI)'}
           </span>
           {colabConfig.connected ? (
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -133,23 +172,48 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
+        {/* Action 1: AI Xóa Chữ (LaMa Manga Inpainting) */}
+        {onRunAutoCleanOnly && (
+          <button
+            onClick={onRunAutoCleanOnly}
+            disabled={!currentFilename || isProcessing}
+            className="btn-secondary desktop-only border-red-500/30 text-red-300 hover:bg-red-500/20"
+            title="Dùng AI LaMa Manga trên Colab để xóa sạch chữ và tái tạo nền tranh"
+          >
+            <Eraser className="w-3.5 h-3.5 text-red-400" />
+            <span>Xóa Nền LaMa</span>
+          </button>
+        )}
 
-        {/* Desktop-only Auto Process Page */}
+        {/* Action 2: Dịch Chữ (Gemini Vision / Manga-OCR) */}
+        {onRunTranslateOnly && (
+          <button
+            onClick={onRunTranslateOnly}
+            disabled={!currentFilename || isProcessing}
+            className="btn-secondary desktop-only border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/20"
+            title="Nhận diện chữ và dịch câu thoại sang tiếng Việt"
+          >
+            <Languages className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Dịch Văn Bản</span>
+          </button>
+        )}
+
+        {/* Action 3: Tự động tất cả (Xóa & Dịch) */}
         <button
           onClick={onRunAutoCleanAndTranslate}
           disabled={!currentFilename || isProcessing}
           className="btn-primary desktop-only"
-          title="Xóa chữ bằng LaMa và Dịch tự động trang hiện tại"
+          title="Tự động xóa nền bằng LaMa và Dịch toàn bộ trang hiện tại"
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span>{isProcessing ? 'Đang xử lý AI...' : 'Tự động Dịch Trang'}</span>
+          <span>{isProcessing ? 'Đang xử lý...' : 'Tự Động Tất Cả'}</span>
         </button>
 
         {/* Batch Process All */}
         <button
           onClick={onOpenBatchModal}
           className="btn-secondary desktop-only"
-          title="Chạy dịch hàng loạt tất cả ảnh từ raw materials ra test-case"
+          title="Chạy dịch hàng loạt tất cả ảnh trong danh sách"
         >
           <PlayCircle className="w-3.5 h-3.5 text-purple-400" />
           <span>Hàng Loạt</span>
@@ -160,12 +224,13 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={onExportCurrent}
           disabled={!currentFilename}
           className="btn-secondary desktop-only"
-          title="Lưu ảnh hoàn chỉnh vào d:\dich\test-case"
+          title="Lưu ảnh hoàn chỉnh"
         >
           <Download className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Xuất test-case</span>
+          <span>Xuất Ảnh</span>
         </button>
       </div>
     </header>
   );
 };
+

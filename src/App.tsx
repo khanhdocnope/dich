@@ -111,30 +111,85 @@ export const App: React.FC = () => {
     loadImages();
   }, [loadImages]);
 
+  // History Management for Undo / Redo
+  const [history, setHistory] = useState<Array<{ cleanedImageBase64: string | null; bubbles: Bubble[] }>>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  const pushHistory = useCallback((newCleaned: string | null, newBubbles: Bubble[]) => {
+    setHistory((prev) => {
+      const updated = prev.slice(0, historyIndex + 1);
+      return [...updated, { cleanedImageBase64: newCleaned, bubbles: newBubbles }];
+    });
+    setHistoryIndex((prev) => prev + 1);
+  }, [historyIndex]);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+      const nextIdx = historyIndex - 1;
+      const target = history[nextIdx];
+      setHistoryIndex(nextIdx);
+      setCleanedImageBase64(target.cleanedImageBase64);
+      setBubbles(target.bubbles);
+      if (selectedFilename) {
+        saveProjectMetadata(selectedFilename, target.bubbles, target.cleanedImageBase64 || undefined);
+      }
+    }
+  }, [history, historyIndex, selectedFilename]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const nextIdx = historyIndex + 1;
+      const target = history[nextIdx];
+      setHistoryIndex(nextIdx);
+      setCleanedImageBase64(target.cleanedImageBase64);
+      setBubbles(target.bubbles);
+      if (selectedFilename) {
+        saveProjectMetadata(selectedFilename, target.bubbles, target.cleanedImageBase64 || undefined);
+      }
+    }
+  }, [history, historyIndex, selectedFilename]);
+
+  const handleResetCleaned = useCallback(() => {
+    if (window.confirm('Khôi phục lại tranh gốc ban đầu (xóa bỏ toàn bộ phần đã inpaint/xóa chữ)?')) {
+      pushHistory(null, bubbles);
+      setCleanedImageBase64(null);
+      if (selectedFilename) {
+        saveProjectMetadata(selectedFilename, bubbles, undefined);
+      }
+    }
+  }, [bubbles, pushHistory, selectedFilename]);
+
   // Load metadata and image data whenever selectedFilename changes
   useEffect(() => {
     if (!selectedFilename) {
       setBubbles([]);
       setSelectedBubbleId(null);
       setCleanedImageBase64(null);
+      setHistory([]);
+      setHistoryIndex(-1);
       return;
     }
 
     const loadPageData = async () => {
       const metadata = await loadProjectMetadata(selectedFilename);
       if (metadata && metadata.bubbles) {
-        setBubbles(metadata.bubbles);
-        setCleanedImageBase64(metadata.cleanedImageBase64 || null);
-        if (metadata.bubbles.length > 0) {
-          setSelectedBubbleId(metadata.bubbles[0].id);
+        const loadedBubbles = metadata.bubbles;
+        const loadedCleaned = metadata.cleanedImageBase64 || null;
+        setBubbles(loadedBubbles);
+        setCleanedImageBase64(loadedCleaned);
+        setHistory([{ cleanedImageBase64: loadedCleaned, bubbles: loadedBubbles }]);
+        setHistoryIndex(0);
+        if (loadedBubbles.length > 0) {
+          setSelectedBubbleId(loadedBubbles[0].id);
         } else {
           setSelectedBubbleId(null);
         }
       } else {
-        // New page with no saved bubbles starts clean
         setBubbles([]);
         setSelectedBubbleId(null);
         setCleanedImageBase64(null);
+        setHistory([{ cleanedImageBase64: null, bubbles: [] }]);
+        setHistoryIndex(0);
       }
     };
 
@@ -148,7 +203,6 @@ export const App: React.FC = () => {
       const { newItems, detectedFolderName } = await importImagesFromFolderOrFiles(files, images);
       if (detectedFolderName) {
         setCurrentFolderName(detectedFolderName);
-        // Automatically default output subfolder to match input folder
         setOutputConfig((prev) => ({
           ...prev,
           customFolderName: `MangaTranslator/${detectedFolderName}`,
@@ -158,7 +212,6 @@ export const App: React.FC = () => {
       if (newItems.length > 0) {
         const updatedList = [...images, ...newItems];
         setImages(updatedList);
-        // Automatically select first added image if none was active
         if (!selectedFilename) {
           setSelectedFilename(newItems[0].filename);
         }
@@ -254,14 +307,16 @@ export const App: React.FC = () => {
     }
   };
 
-
-  // Run full Auto Clean (LaMa) + OCR + Translation for current page
-  const handleRunAutoCleanAndTranslate = async () => {
+  // 1. Action: AI LaMa Manga inpainting ONLY (Xóa chữ tái tạo nền)
+  const handleRunAutoCleanOnly = async () => {
     if (!selectedFilename || !currentImage) return;
+    if (bubbles.length === 0) {
+      alert('⚠️ Chưa có ô thoại nào trên trang!\nHãy bấm "Thêm Ô (B)" để bao quanh chữ cần xóa hoặc dùng "Cọ LaMa" để quét.');
+      return;
+    }
 
     setIsProcessing(true);
     try {
-      // 1. Generate text mask for bubbles to inpaint with LaMa
       const maskCanvas = document.createElement('canvas');
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -285,23 +340,89 @@ export const App: React.FC = () => {
       }
 
       const maskBase64 = maskCanvas.toDataURL('image/png');
+      const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
+      const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
 
-      // 2. Call LaMa Inpainting
-      const cleaned = await inpaintImageWithLaMa(
-        colabConfig.serverUrl,
-        currentImage.rawUrl,
-        maskBase64
-      );
-      setCleanedImageBase64(cleaned);
+      if (cleaned && cleaned !== sourceImg) {
+        pushHistory(cleaned, bubbles);
+        setCleanedImageBase64(cleaned);
+        await saveProjectMetadata(selectedFilename, bubbles, cleaned);
+      }
+    } catch (e) {
+      console.error('Auto clean failed:', e);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
-      // 3. Call OCR
+  // 2. Action: Translate ONLY (Dịch văn bản bằng Gemini / Manga-OCR)
+  const handleRunTranslateOnly = async () => {
+    if (!selectedFilename || !currentImage) return;
+    if (bubbles.length === 0) {
+      alert('⚠️ Chưa có ô thoại nào để dịch!\nHãy bấm "Thêm Ô (B)" để tạo ô thoại quanh lời thoại nhân vật.');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
       const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, bubbles);
-
-      // 4. Call Translation (Vision AI or Uncensored Manga-OCR + DeepL/Google)
       const translatedResultBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
 
+      pushHistory(cleanedImageBase64, translatedResultBubbles);
       setBubbles(translatedResultBubbles);
-      await saveProjectMetadata(selectedFilename, translatedResultBubbles, cleaned);
+      await saveProjectMetadata(selectedFilename, translatedResultBubbles, cleanedImageBase64 || undefined);
+    } catch (e) {
+      console.error('Translation failed:', e);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // 3. Action: Full Auto (Xóa nền LaMa + Dịch)
+  const handleRunAutoCleanAndTranslate = async () => {
+    if (!selectedFilename || !currentImage) return;
+
+    setIsProcessing(true);
+    try {
+      let cleaned = cleanedImageBase64;
+      if (bubbles.length > 0) {
+        const maskCanvas = document.createElement('canvas');
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise((res) => {
+          img.onload = res;
+          img.src = currentImage.rawUrl;
+        });
+
+        maskCanvas.width = img.width;
+        maskCanvas.height = img.height;
+        const mctx = maskCanvas.getContext('2d');
+        if (mctx) {
+          mctx.fillStyle = '#000000';
+          mctx.fillRect(0, 0, img.width, img.height);
+          mctx.fillStyle = '#ffffff';
+          bubbles.forEach((b) => {
+            mctx.beginPath();
+            mctx.roundRect(b.x, b.y, b.width, b.height, 8);
+            mctx.fill();
+          });
+        }
+
+        const maskBase64 = maskCanvas.toDataURL('image/png');
+        const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
+        cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
+        if (cleaned && cleaned !== sourceImg) {
+          setCleanedImageBase64(cleaned);
+        }
+      }
+
+      // OCR & Translation
+      const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, bubbles);
+      const translatedResultBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
+
+      pushHistory(cleaned || null, translatedResultBubbles);
+      setBubbles(translatedResultBubbles);
+      await saveProjectMetadata(selectedFilename, translatedResultBubbles, cleaned || undefined);
     } catch (e) {
       console.error('Auto clean and translate failed:', e);
     } finally {
@@ -309,89 +430,103 @@ export const App: React.FC = () => {
     }
   };
 
-  // Process a single page (used by Batch Processor)
+  // Manual brush inpaint with LaMa Manga
+  const handleManualInpaintArea = async (maskBase64: string) => {
+    if (!currentImage) return;
+    setIsProcessing(true);
+    try {
+      const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
+      const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
+      if (cleaned && cleaned !== sourceImg) {
+        pushHistory(cleaned, bubbles);
+        setCleanedImageBase64(cleaned);
+        if (selectedFilename) {
+          await saveProjectMetadata(selectedFilename, bubbles, cleaned);
+        }
+      }
+    } catch (e) {
+      console.error('Manual inpaint failed:', e);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Batch process single page runner
   const handleProcessSinglePageForBatch = async (filename: string): Promise<boolean> => {
     try {
-      const imgItem = images.find((i) => i.filename === filename);
-      if (!imgItem) return false;
+      const page = images.find((img) => img.filename === filename);
+      if (!page) return false;
+      const metadata = await loadProjectMetadata(filename);
+      const pageBubbles = metadata?.bubbles || [];
+      let cleaned = metadata?.cleanedImageBase64 || null;
 
-      // Check if project metadata already exists
-      const existingMeta = await loadProjectMetadata(filename);
-      let pageBubbles = existingMeta?.bubbles || [];
-
-      // Clean with LaMa
-      const maskCanvas = document.createElement('canvas');
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise((res) => {
-        img.onload = res;
-        img.src = imgItem.rawUrl;
-      });
-
-      maskCanvas.width = img.width;
-      maskCanvas.height = img.height;
-      const mctx = maskCanvas.getContext('2d');
-      if (mctx) {
-        mctx.fillStyle = '#000000';
-        mctx.fillRect(0, 0, img.width, img.height);
-        mctx.fillStyle = '#ffffff';
-        pageBubbles.forEach((b: Bubble) => {
-          mctx.beginPath();
-          mctx.roundRect(b.x, b.y, b.width, b.height, 8);
-          mctx.fill();
+      if (pageBubbles.length > 0 && colabConfig.serverUrl) {
+        const maskCanvas = document.createElement('canvas');
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise((res) => {
+          img.onload = res;
+          img.src = page.rawUrl;
         });
+        maskCanvas.width = img.width;
+        maskCanvas.height = img.height;
+        const mctx = maskCanvas.getContext('2d');
+        if (mctx) {
+          mctx.fillStyle = '#000000';
+          mctx.fillRect(0, 0, img.width, img.height);
+          mctx.fillStyle = '#ffffff';
+          pageBubbles.forEach((b: Bubble) => {
+            mctx.beginPath();
+            mctx.roundRect(b.x, b.y, b.width, b.height, 8);
+            mctx.fill();
+          });
+        }
+        const maskBase64 = maskCanvas.toDataURL('image/png');
+        const inpaintRes = await inpaintImageWithLaMa(colabConfig.serverUrl, page.rawUrl, maskBase64);
+        if (inpaintRes && inpaintRes !== page.rawUrl) {
+          cleaned = inpaintRes;
+        }
       }
 
-      const maskBase64 = maskCanvas.toDataURL('image/png');
-      const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, imgItem.rawUrl, maskBase64);
-
-      // OCR & Translate
-      const ocred = await ocrBubbles(colabConfig, imgItem.rawUrl, pageBubbles);
-      const translated = await translateBubbles(colabConfig, ocred);
-
-      // Render to image
-      const renderCanvas = document.createElement('canvas');
-      renderCanvas.width = img.width;
-      renderCanvas.height = img.height;
-      const rctx = renderCanvas.getContext('2d');
-      if (!rctx) return false;
-
-      const cleanImg = new Image();
-      cleanImg.crossOrigin = 'anonymous';
-      await new Promise((res) => {
-        cleanImg.onload = res;
-        cleanImg.src = cleaned;
-      });
-
-      rctx.drawImage(cleanImg, 0, 0);
-      translated.forEach((b: Bubble) => {
-        renderBubbleOnCanvas(rctx, b);
-      });
-
-      const finalBase64 = renderCanvas.toDataURL('image/png');
-
-      // Save to device and test-case
-      const targetFolder = outputConfig.customFolderName || 'MangaTranslator/Output';
-      const okResult = await saveOutputImage(filename, finalBase64, false, targetFolder);
-      if (okResult.success) {
-        await saveProjectMetadata(filename, translated, cleaned);
+      let translatedResult = pageBubbles;
+      if (pageBubbles.length > 0) {
+        const ocrResult = await ocrBubbles(colabConfig, page.rawUrl, pageBubbles);
+        translatedResult = await translateBubbles(colabConfig, ocrResult);
       }
-      return okResult.success;
+
+      // Render to final canvas
+      const renderBase64 = await new Promise<string | null>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = cleaned || page.rawUrl;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(null);
+          ctx.drawImage(img, 0, 0);
+          translatedResult.forEach((b: Bubble) => {
+            renderBubbleOnCanvas(ctx, b);
+          });
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = () => resolve(null);
+      });
+
+      if (renderBase64) {
+        const targetFolder = outputConfig.customFolderName || 'MangaTranslator/Output';
+        await saveOutputImage(filename, renderBase64, true, targetFolder);
+        await saveProjectMetadata(filename, translatedResult, cleaned || undefined);
+        return true;
+      }
+      return false;
     } catch (e) {
-      console.error(`Failed batch page ${filename}:`, e);
+      console.error('Batch process single page failed:', e);
       return false;
     }
   };
 
-  // Manual brush inpaint
-  const handleManualInpaintArea = async (maskBase64: string) => {
-    if (!currentImage) return;
-    setIsProcessing(true);
-    const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
-    const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
-    setCleanedImageBase64(cleaned);
-    setIsProcessing(false);
-  };
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -404,7 +539,13 @@ export const App: React.FC = () => {
         onOpenBatchModal={() => setIsBatchModalOpen(true)}
         onOpenOutputModal={() => setIsOutputModalOpen(true)}
         onExportCurrent={handleExportCurrent}
+        onRunAutoCleanOnly={handleRunAutoCleanOnly}
+        onRunTranslateOnly={handleRunTranslateOnly}
         onRunAutoCleanAndTranslate={handleRunAutoCleanAndTranslate}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={historyIndex > 0}
+        canRedo={historyIndex < history.length - 1}
         isProcessing={isProcessing}
         onEngineChange={(mode: EngineMode) =>
           handleSaveColabConfig({ ...colabConfig, engineMode: mode })
@@ -463,6 +604,11 @@ export const App: React.FC = () => {
           }}
           onManualInpaintArea={handleManualInpaintArea}
           onAddImages={handleAddImages}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          canUndo={historyIndex > 0}
+          canRedo={historyIndex < history.length - 1}
+          onResetCleaned={handleResetCleaned}
         />
 
         {/* Right: Bubble Property Inspector */}

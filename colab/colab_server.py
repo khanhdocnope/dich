@@ -85,8 +85,23 @@ class LamaMangaOnnx:
         if res_np.shape[0] == 3:
             res_np = np.transpose(res_np, (1, 2, 0))
 
-        res_np = np.clip(res_np * 255.0, 0, 255).astype(np.uint8)
-        return Image.fromarray(res_np).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+        # Safe dynamic scale detection: if output is [0, 1] vs [0, 255]
+        if res_np.max() <= 1.05 and res_np.max() > 0:
+            res_np = res_np * 255.0
+        res_np = np.clip(res_np, 0, 255).astype(np.uint8)
+
+        # High-Quality Composite Blend with original image using mask
+        res_img = Image.fromarray(res_np).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+        res_arr = np.array(res_img).astype(np.float32)
+        orig_arr = np.array(img).astype(np.float32)
+        
+        mask_orig = np.array(mask.convert("L").resize((orig_w, orig_h), Image.Resampling.BILINEAR)).astype(np.float32) / 255.0
+        mask_orig = np.expand_dims(mask_orig, axis=2) # (H, W, 1)
+
+        # Seamless alpha composite: only replace masked area, leave surrounding art 100% crisp and pristine
+        final_arr = (res_arr * mask_orig + orig_arr * (1.0 - mask_orig)).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(final_arr)
+
 
 lama = None
 mocr = None
