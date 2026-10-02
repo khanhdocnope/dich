@@ -12,7 +12,8 @@ import { CanvasEditor } from './components/CanvasEditor';
 import { BubbleInspector } from './components/BubbleInspector';
 import { ColabModal } from './components/ColabModal';
 import { BatchProcessorModal } from './components/BatchProcessorModal';
-import { PageItem, Bubble, ColabConfig, EngineMode } from './types';
+import { OutputFolderModal } from './components/OutputFolderModal';
+import { PageItem, Bubble, ColabConfig, EngineMode, OutputFolderConfig } from './types';
 import { 
   fetchImageList, 
   saveOutputImage, 
@@ -20,7 +21,7 @@ import {
   loadProjectMetadata,
   deleteStoredImage,
   clearAllStoredImages,
-  importImagesFromFiles
+  importImagesFromFolderOrFiles
 } from './services/api';
 import { loadSavedColabConfig, saveStoredColabConfig } from './services/storage';
 import { 
@@ -34,6 +35,7 @@ export const App: React.FC = () => {
   // Application Data States
   const [images, setImages] = useState<PageItem[]>([]);
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null);
+  const [currentFolderName, setCurrentFolderName] = useState<string>('');
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [selectedBubbleId, setSelectedBubbleId] = useState<string | null>(null);
   const [cleanedImageBase64, setCleanedImageBase64] = useState<string | null>(null);
@@ -49,6 +51,28 @@ export const App: React.FC = () => {
   // Modals
   const [isColabModalOpen, setIsColabModalOpen] = useState<boolean>(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
+  const [isOutputModalOpen, setIsOutputModalOpen] = useState<boolean>(false);
+
+  // Output Folder Config (persisted across sessions)
+  const [outputConfig, setOutputConfig] = useState<OutputFolderConfig>(() => {
+    try {
+      const saved = localStorage.getItem('manga_studio_output_config');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      customFolderName: 'MangaTranslator/Chapter_01',
+      autoDownloadSingle: true,
+      directoryHandleName: null,
+    };
+  });
+
+  const handleSaveOutputConfig = (newCfg: OutputFolderConfig) => {
+    setOutputConfig(newCfg);
+    try {
+      localStorage.setItem('manga_studio_output_config', JSON.stringify(newCfg));
+    } catch {}
+  };
+
 
   // Colab & AI Config (persisted across sessions)
   const [colabConfig, setColabConfig] = useState<ColabConfig>(() => {
@@ -117,22 +141,31 @@ export const App: React.FC = () => {
     loadPageData();
   }, [selectedFilename]);
 
-  // Import images from Phone Gallery / File Picker / Drag & Drop
+  // Import images or whole directory from Gallery / File Picker / Folder Picker / Drag & Drop
   const handleAddImages = async (files: FileList | File[]) => {
     setIsLoadingImages(true);
     try {
-      const added = await importImagesFromFiles(files, images);
-      if (added.length > 0) {
-        const updatedList = [...images, ...added];
+      const { newItems, detectedFolderName } = await importImagesFromFolderOrFiles(files, images);
+      if (detectedFolderName) {
+        setCurrentFolderName(detectedFolderName);
+        // Automatically default output subfolder to match input folder
+        setOutputConfig((prev) => ({
+          ...prev,
+          customFolderName: `MangaTranslator/${detectedFolderName}`,
+        }));
+      }
+
+      if (newItems.length > 0) {
+        const updatedList = [...images, ...newItems];
         setImages(updatedList);
         // Automatically select first added image if none was active
         if (!selectedFilename) {
-          setSelectedFilename(added[0].filename);
+          setSelectedFilename(newItems[0].filename);
         }
       }
     } catch (err) {
-      console.error('Error importing images:', err);
-      alert('Không thể nhập một số ảnh. Vui lòng thử lại.');
+      console.error('Error importing images / folder:', err);
+      alert('Không thể nhập ảnh hoặc thư mục. Vui lòng thử lại.');
     } finally {
       setIsLoadingImages(false);
     }
@@ -161,6 +194,7 @@ export const App: React.FC = () => {
     await clearAllStoredImages();
     setImages([]);
     setSelectedFilename(null);
+    setCurrentFolderName('');
     setBubbles([]);
     setSelectedBubbleId(null);
     setCleanedImageBase64(null);
@@ -197,15 +231,16 @@ export const App: React.FC = () => {
     });
   }, [currentImage, cleanedImageBase64, bubbles]);
 
-  // Export current page to device gallery / downloads & test-case directory
+  // Export current page to device gallery / downloads & chosen folder
   const handleExportCurrent = async () => {
     if (!selectedFilename) return;
 
     const base64 = await renderCurrentPageToBase64();
     if (!base64) return;
 
-    const success = await saveOutputImage(selectedFilename, base64, true);
-    if (success) {
+    const targetFolder = outputConfig.customFolderName || 'MangaTranslator/Output';
+    const result = await saveOutputImage(selectedFilename, base64, true, targetFolder);
+    if (result.success) {
       await saveProjectMetadata(selectedFilename, bubbles, cleanedImageBase64 || undefined);
       // Update image item status
       setImages((prev) =>
@@ -213,11 +248,12 @@ export const App: React.FC = () => {
           img.filename === selectedFilename ? { ...img, status: 'done', outputUrl: base64 } : img
         )
       );
-      alert(`🎉 Đã xuất và tải ảnh "${selectedFilename}" về máy thành công!`);
+      alert(`🎉 Đã xuất thành công "${selectedFilename}"!\n📂 Vị trí: ${result.savedPath || targetFolder}`);
     } else {
       alert(`⚠️ Không thể lưu trang "${selectedFilename}". Vui lòng thử lại.`);
     }
   };
+
 
   // Run full Auto Clean (LaMa) + OCR + Translation for current page
   const handleRunAutoCleanAndTranslate = async () => {
@@ -335,11 +371,12 @@ export const App: React.FC = () => {
       const finalBase64 = renderCanvas.toDataURL('image/png');
 
       // Save to device and test-case
-      const ok = await saveOutputImage(filename, finalBase64, false);
-      if (ok) {
+      const targetFolder = outputConfig.customFolderName || 'MangaTranslator/Output';
+      const okResult = await saveOutputImage(filename, finalBase64, false, targetFolder);
+      if (okResult.success) {
         await saveProjectMetadata(filename, translated, cleaned);
       }
-      return ok;
+      return okResult.success;
     } catch (e) {
       console.error(`Failed batch page ${filename}:`, e);
       return false;
@@ -362,8 +399,10 @@ export const App: React.FC = () => {
       <Header
         currentFilename={selectedFilename}
         colabConfig={colabConfig}
+        outputFolderName={outputConfig.customFolderName}
         onOpenColabModal={() => setIsColabModalOpen(true)}
         onOpenBatchModal={() => setIsBatchModalOpen(true)}
+        onOpenOutputModal={() => setIsOutputModalOpen(true)}
         onExportCurrent={handleExportCurrent}
         onRunAutoCleanAndTranslate={handleRunAutoCleanAndTranslate}
         isProcessing={isProcessing}
@@ -389,6 +428,7 @@ export const App: React.FC = () => {
         <Sidebar
           images={images}
           selectedFilename={selectedFilename}
+          currentFolderName={currentFolderName}
           onSelectImage={(filename) => {
             setSelectedFilename(filename);
             setSelectedBubbleId(null);
@@ -397,6 +437,7 @@ export const App: React.FC = () => {
           onAddImages={handleAddImages}
           onDeleteImage={handleDeleteImage}
           onClearAllImages={handleClearAllImages}
+          onOpenOutputModal={() => setIsOutputModalOpen(true)}
           isLoading={isLoadingImages}
           isOpenMobile={isMobileSidebarOpen}
           onCloseMobile={() => setIsMobileSidebarOpen(false)}
@@ -521,9 +562,21 @@ export const App: React.FC = () => {
         onClose={() => setIsBatchModalOpen(false)}
         images={images}
         colabConfig={colabConfig}
+        outputFolderName={outputConfig.customFolderName}
         onProcessSinglePage={handleProcessSinglePageForBatch}
         onBatchCompleted={loadImages}
+        onOpenOutputModal={() => setIsOutputModalOpen(true)}
+      />
+
+      {/* Output Folder Settings & ZIP Export Modal */}
+      <OutputFolderModal
+        isOpen={isOutputModalOpen}
+        onClose={() => setIsOutputModalOpen(false)}
+        images={images}
+        outputConfig={outputConfig}
+        onSaveConfig={handleSaveOutputConfig}
       />
     </div>
   );
 };
+

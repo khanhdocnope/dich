@@ -6,15 +6,18 @@ import {
   PlayCircle, 
   ShieldCheck, 
   Zap, 
-  FolderOpen
+  FolderOpen,
+  FolderCheck
 } from 'lucide-react';
 import { ColabConfig, EngineMode } from '../types';
 
 interface HeaderProps {
   currentFilename: string | null;
   colabConfig: ColabConfig;
+  outputFolderName?: string;
   onOpenColabModal: () => void;
   onOpenBatchModal: () => void;
+  onOpenOutputModal?: () => void;
   onExportCurrent: () => void;
   onRunAutoCleanAndTranslate: () => void;
   isProcessing: boolean;
@@ -24,13 +27,16 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentFilename,
   colabConfig,
+  outputFolderName,
   onOpenColabModal,
   onOpenBatchModal,
+  onOpenOutputModal,
   onExportCurrent,
   onRunAutoCleanAndTranslate,
   isProcessing,
   onEngineChange,
 }) => {
+
   return (
     <header className="h-14 md:h-16 glass-header px-3 md:px-5 flex items-center justify-between z-30 shrink-0 select-none">
       {/* Brand & Active File */}
@@ -95,6 +101,18 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
+        {/* Output Folder Settings */}
+        {onOpenOutputModal && (
+          <button
+            onClick={onOpenOutputModal}
+            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-indigo-500/50 transition-all flex items-center space-x-1.5"
+            title={`Cài đặt thư mục lưu kết quả (Đang lưu: ${outputFolderName || 'MangaTranslator/Output'})`}
+          >
+            <FolderCheck className="w-4 h-4 text-indigo-400" />
+            <span className="desktop-inline text-xs font-medium">Thư Mục Lưu</span>
+          </button>
+        )}
+
         {/* Colab Status Button */}
         <button
           onClick={onOpenColabModal}
@@ -113,6 +131,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="w-2 h-2 rounded-full bg-amber-400"></span>
           )}
         </button>
+
 
         {/* Desktop-only Auto Process Page */}
         <button

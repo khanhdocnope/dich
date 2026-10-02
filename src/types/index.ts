@@ -57,3 +57,10 @@ export interface ColabConfig {
   engineMode: EngineMode;
   targetLang: string;
 }
+
+export interface OutputFolderConfig {
+  customFolderName: string; // e.g. "MangaTranslator/Chapter_01"
+  autoDownloadSingle: boolean;
+  directoryHandleName?: string | null;
+}
+

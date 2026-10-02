@@ -8,17 +8,23 @@ import {
   Loader2, 
   Layers, 
   FolderCheck,
-  Sparkles
+  Sparkles,
+  Download,
+  FolderOpen,
+  FileArchive
 } from 'lucide-react';
 import { PageItem, ColabConfig } from '../types';
+import { exportImagesAsZip } from '../services/folderService';
 
 interface BatchProcessorModalProps {
   isOpen: boolean;
   onClose: () => void;
   images: PageItem[];
   colabConfig: ColabConfig;
+  outputFolderName?: string;
   onProcessSinglePage: (filename: string) => Promise<boolean>;
   onBatchCompleted: () => void;
+  onOpenOutputModal?: () => void;
 }
 
 export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
@@ -26,10 +32,13 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
   onClose,
   images,
   colabConfig,
+  outputFolderName = 'MangaTranslator/Chapter_01',
   onProcessSinglePage,
   onBatchCompleted,
+  onOpenOutputModal,
 }) => {
   if (!isOpen) return null;
+
 
   const [isRunning, setIsRunning] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -200,11 +209,36 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/60 flex items-center justify-between">
-          <div className="text-xs text-slate-400">
-            Thư mục xuất: <span className="text-slate-200 font-mono">d:\dich\test-case</span>
+        <div className="p-4 border-t border-slate-800 bg-slate-900/60 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-2 text-xs text-slate-400">
+            <span>Lưu vào:</span>
+            <span className="text-indigo-300 font-mono bg-slate-950 px-2 py-1 rounded border border-slate-800 truncate max-w-[200px]">
+              {outputFolderName}
+            </span>
+            {onOpenOutputModal && (
+              <button
+                onClick={onOpenOutputModal}
+                disabled={isRunning}
+                className="p-1 hover:text-indigo-300 text-slate-400 rounded transition-colors"
+                title="Thay đổi thư mục lưu"
+              >
+                <FolderCheck className="w-4 h-4" />
+              </button>
+            )}
           </div>
-          <div className="flex items-center space-x-2">
+
+          <div className="flex items-center space-x-2 justify-end">
+            {processedCount > 0 && !isRunning && (
+              <button
+                onClick={() => exportImagesAsZip(images, `${outputFolderName.replace(/[\/\\:]/g, '_')}_Translated.zip`)}
+                className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 flex items-center space-x-1.5 transition-all"
+                title="Tải toàn bộ kết quả về dạng file .ZIP"
+              >
+                <FileArchive className="w-3.5 h-3.5" />
+                <span>Tải .ZIP</span>
+              </button>
+            )}
+
             <button
               onClick={onClose}
               disabled={isRunning}
@@ -235,3 +269,4 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
     </div>
   );
 };
+

@@ -44,6 +44,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
 
   // View & Transform States
   const [zoom, setZoom] = useState<number>(0.8);
@@ -633,6 +635,24 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         className="hidden"
       />
 
+      {/* Hidden Folder Input for Entire Directory Selection */}
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0 && onAddImages) {
+            onAddImages(e.target.files);
+            e.target.value = '';
+          }
+        }}
+        // @ts-ignore
+        webkitdirectory=""
+        directory=""
+        multiple
+        className="hidden"
+      />
+
+
       {/* Drag Over Overlay */}
       {isDraggingFileOver && (
         <div className="absolute inset-0 z-40 bg-indigo-950/80 backdrop-blur-sm border-2 border-dashed border-indigo-400 flex flex-col items-center justify-center p-6 space-y-4">
@@ -829,20 +849,28 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               </p>
             </div>
 
-            <div className="space-y-3 pt-2">
+            <div className="space-y-2.5 pt-2">
               <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-sm shadow-xl shadow-indigo-500/30 transition-all active:scale-[0.98] flex items-center justify-center space-x-2"
+                onClick={() => folderInputRef.current?.click()}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-xl shadow-purple-500/30 transition-all active:scale-[0.98] flex items-center justify-center space-x-2"
               >
-                <ImagePlus className="w-5 h-5" />
-                <span>📱 Chọn Ảnh Từ Thư Viện Điện Thoại</span>
+                <span>📁 Chọn Cả Thư Mục Ảnh (Chapter)</span>
               </button>
 
-              <div className="text-[11px] text-slate-500 flex items-center justify-center space-x-2">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-3 px-6 rounded-2xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition-all active:scale-[0.98] flex items-center justify-center space-x-2"
+              >
+                <ImagePlus className="w-4 h-4 text-indigo-400" />
+                <span>📱 Chọn Nhiều Ảnh Lẻ Từ Thư Viện</span>
+              </button>
+
+              <div className="text-[11px] text-slate-500 flex items-center justify-center space-x-2 pt-1">
                 <FileImage className="w-3.5 h-3.5 text-slate-400" />
-                <span>Hỗ trợ JPG, PNG, WEBP (chọn 1 hoặc nhiều ảnh cùng lúc)</span>
+                <span>Hỗ trợ JPG, PNG, WEBP, BMP (tự động sắp xếp trang số 1, 2, 3...)</span>
               </div>
             </div>
+
           </div>
         </div>
       )}

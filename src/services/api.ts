@@ -8,13 +8,24 @@ import {
   triggerDownloadImage,
   importImagesFromFiles
 } from './storage';
+import {
+  saveImageToOutputFolder,
+  importImagesFromFolderOrFiles,
+  exportImagesAsZip,
+  pickLocalOutputDirectory
+} from './folderService';
 
 export {
   deleteStoredImage,
   clearAllStoredImages,
   triggerDownloadImage,
-  importImagesFromFiles
+  importImagesFromFiles,
+  saveImageToOutputFolder,
+  importImagesFromFolderOrFiles,
+  exportImagesAsZip,
+  pickLocalOutputDirectory
 };
+
 
 /**
  * Fetch image list from local IndexedDB first, with automatic fallback/sync to Node.js backend if available
@@ -60,13 +71,14 @@ export const fetchImageList = async (): Promise<{
 };
 
 /**
- * Save output image: Persist in IndexedDB, trigger direct device download, and sync to Node.js backend if available
+ * Save output image: Persist in IndexedDB, trigger save to chosen device folder / download, and sync to Node.js backend if available
  */
 export const saveOutputImage = async (
   filename: string,
   imageBase64: string,
-  autoDownload: boolean = true
-): Promise<boolean> => {
+  autoDownload: boolean = true,
+  folderName: string = 'MangaTranslator/Output'
+): Promise<{ success: boolean; savedPath?: string }> => {
   try {
     // 1. Update status and outputUrl in IndexedDB
     const localImages = await getAllStoredImages();
@@ -77,9 +89,13 @@ export const saveOutputImage = async (
       await saveStoredImage(existing);
     }
 
-    // 2. Trigger direct download to device storage (Phone Downloads/Gallery / PC)
+    // 2. Save directly to Android Documents / chosen folder or trigger download
+    let savedPath = filename;
     if (autoDownload) {
-      triggerDownloadImage(filename, imageBase64);
+      const result = await saveImageToOutputFolder(filename, imageBase64, folderName, true);
+      if (result.savedPath) {
+        savedPath = result.savedPath;
+      }
     }
 
     // 3. Sync to desktop Node backend if available
@@ -91,12 +107,14 @@ export const saveOutputImage = async (
       }).catch(() => {});
     } catch {}
 
-    return true;
+    return { success: true, savedPath };
+
   } catch (error) {
     console.error('Error saving output image:', error);
-    return false;
+    return { success: false };
   }
 };
+
 
 /**
  * Save project metadata (bubbles, inpainting mask/clean layer) locally in IndexedDB and backend

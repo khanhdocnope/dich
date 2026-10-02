@@ -11,18 +11,22 @@ import {
   X,
   ImagePlus,
   Trash2,
-  FolderPlus
+  FolderPlus,
+  FolderCheck,
+  FolderOpen
 } from 'lucide-react';
 import { PageItem } from '../types';
 
 interface SidebarProps {
   images: PageItem[];
   selectedFilename: string | null;
+  currentFolderName?: string;
   onSelectImage: (filename: string) => void;
   onRefreshList: () => void;
   onAddImages: (files: FileList | File[]) => void;
   onDeleteImage?: (filename: string) => void;
   onClearAllImages?: () => void;
+  onOpenOutputModal?: () => void;
   isLoading: boolean;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
@@ -31,11 +35,13 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   images,
   selectedFilename,
+  currentFolderName,
   onSelectImage,
   onRefreshList,
   onAddImages,
   onDeleteImage,
   onClearAllImages,
+  onOpenOutputModal,
   isLoading,
   isOpenMobile = false,
   onCloseMobile,
@@ -44,6 +50,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'raw' | 'done'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
 
   const filteredImages = images.filter((img) => {
     const matchesSearch = img.filename.toLowerCase().includes(searchTerm.toLowerCase());
@@ -57,7 +65,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       onAddImages(e.target.files);
-      // Reset input value so same files can be chosen again if needed
       e.target.value = '';
     }
   };
@@ -66,13 +73,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     fileInputRef.current?.click();
   };
 
+  const handleTriggerPickFolder = () => {
+    folderInputRef.current?.click();
+  };
+
   return (
     <aside
       className={`sidebar-drawer ${isOpenMobile ? 'open' : ''} relative h-full glass-panel border-r border-slate-800 transition-all duration-300 flex flex-col z-20 select-none ${
         collapsed ? 'w-14' : 'w-72 sm:w-80'
       }`}
     >
-      {/* Hidden File Input for Phone Gallery / Device Storage */}
+      {/* Hidden File Input for Individual/Multiple Images */}
       <input
         type="file"
         ref={fileInputRef}
@@ -82,24 +93,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
         className="hidden"
       />
 
+      {/* Hidden Folder Input for Entire Directory Selection */}
+      <input
+        type="file"
+        ref={folderInputRef}
+        onChange={handleFileInputChange}
+        // @ts-ignore
+        webkitdirectory=""
+        directory=""
+        multiple
+        className="hidden"
+      />
+
       {/* Top Header */}
       <div className="p-3 border-b border-slate-800 flex items-center justify-between shrink-0 bg-slate-900/50">
         {!collapsed && (
-          <div className="flex items-center space-x-2">
-            <Images className="w-4 h-4 text-indigo-400" />
-            <h2 className="font-semibold text-xs tracking-wide uppercase text-slate-200">
-              Thư Viện Ảnh ({images.length})
-            </h2>
+          <div className="flex items-center space-x-2 truncate">
+            <Images className="w-4 h-4 text-indigo-400 shrink-0" />
+            <div className="truncate">
+              <h2 className="font-semibold text-xs tracking-wide uppercase text-slate-200 truncate">
+                {currentFolderName ? `📁 ${currentFolderName}` : 'Thư Viện Ảnh'} ({images.length})
+              </h2>
+            </div>
           </div>
         )}
         <div className="flex items-center space-x-1 ml-auto">
-          {/* Quick Add Button (Collapsed & Mobile) */}
+          {/* Quick Add Folder Button (Collapsed & Mobile) */}
           <button
-            onClick={handleTriggerPickImages}
+            onClick={handleTriggerPickFolder}
             className="p-1.5 rounded-lg bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600 hover:text-white transition-all border border-indigo-500/30"
-            title="Chọn ảnh từ Thư viện / Thiết bị"
+            title="Chọn cả thư mục ảnh từ máy/thẻ nhớ"
           >
-            <ImagePlus className="w-3.5 h-3.5" />
+            <FolderOpen className="w-3.5 h-3.5" />
           </button>
 
           {/* Mobile Close Button */}
@@ -134,32 +159,58 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {!collapsed && (
         <>
-          {/* Action Bar: Add Photos Button */}
+          {/* Action Bar: Add Photos / Folders */}
           <div className="p-2.5 border-b border-slate-800/80 bg-slate-950/70 shrink-0 space-y-2">
-            <button
-              onClick={handleTriggerPickImages}
-              className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-semibold shadow-md shadow-indigo-500/20 flex items-center justify-center space-x-2 transition-all active:scale-[0.98]"
-            >
-              <ImagePlus className="w-4 h-4" />
-              <span>+ Chọn Ảnh Từ Thư Viện</span>
-            </button>
+            <div className="grid grid-cols-2 gap-1.5">
+              {/* Pick Folder Button */}
+              <button
+                onClick={handleTriggerPickFolder}
+                className="py-2 px-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-[11.5px] font-semibold shadow-md shadow-purple-500/20 flex items-center justify-center space-x-1.5 transition-all active:scale-[0.98]"
+                title="Chọn toàn bộ thư mục chứa các trang ảnh truyện"
+              >
+                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Chọn Thư Mục</span>
+              </button>
 
-            {images.length > 0 && onClearAllImages && (
-              <div className="flex justify-end">
+              {/* Pick Multiple Images Button */}
+              <button
+                onClick={handleTriggerPickImages}
+                className="py-2 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11.5px] font-semibold border border-slate-700/80 flex items-center justify-center space-x-1.5 transition-all active:scale-[0.98]"
+                title="Chọn từng ảnh hoặc nhiều ảnh lẻ từ thư viện"
+              >
+                <ImagePlus className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="truncate">Thêm Ảnh</span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-0.5">
+              {onOpenOutputModal && (
+                <button
+                  onClick={onOpenOutputModal}
+                  className="text-[10.5px] text-indigo-300 hover:text-indigo-200 transition-colors flex items-center space-x-1 py-0.5 px-1 bg-indigo-950/40 border border-indigo-800/40 rounded-md"
+                  title="Cài đặt thư mục xuất và đóng gói ZIP"
+                >
+                  <FolderCheck className="w-3 h-3 text-indigo-400" />
+                  <span>Cài Đặt Thư Mục Lưu</span>
+                </button>
+              )}
+
+              {images.length > 0 && onClearAllImages && (
                 <button
                   onClick={() => {
                     if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách ảnh hiện tại?')) {
                       onClearAllImages();
                     }
                   }}
-                  className="text-[10.5px] text-slate-400 hover:text-red-400 transition-colors flex items-center space-x-1 py-0.5 px-1"
+                  className="text-[10.5px] text-slate-400 hover:text-red-400 transition-colors flex items-center space-x-1 py-0.5 px-1 ml-auto"
                 >
                   <Trash2 className="w-3 h-3" />
-                  <span>Xóa tất cả ({images.length})</span>
+                  <span>Xóa tất cả</span>
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
+
 
           {/* Search & Filter Bar */}
           <div className="p-3 border-b border-slate-800 space-y-2.5 shrink-0 bg-slate-950">
@@ -214,20 +265,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {images.length === 0 ? (
               <div className="text-center py-10 px-4 space-y-3">
                 <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-950/60 border border-indigo-800/40 flex items-center justify-center text-indigo-400">
-                  <ImagePlus className="w-6 h-6 animate-pulse" />
+                  <FolderOpen className="w-6 h-6 animate-pulse" />
                 </div>
                 <div>
                   <div className="text-xs font-semibold text-slate-200">Chưa có trang truyện nào</div>
                   <div className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                    Chạm nút bên dưới để chọn ảnh từ bộ sưu tập điện thoại
+                    Chọn cả thư mục chapter hoặc chọn từng ảnh từ bộ sưu tập
                   </div>
                 </div>
-                <button
-                  onClick={handleTriggerPickImages}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 transition-all active:scale-95"
-                >
-                  📱 Chọn Ảnh Từ Thư Viện
-                </button>
+                <div className="space-y-2 pt-1">
+                  <button
+                    onClick={handleTriggerPickFolder}
+                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-purple-600/30 transition-all active:scale-95 flex items-center justify-center space-x-1.5"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>📁 Chọn Thư Mục Ảnh</span>
+                  </button>
+                  <button
+                    onClick={handleTriggerPickImages}
+                    className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-all active:scale-95 flex items-center justify-center space-x-1.5"
+                  >
+                    <ImagePlus className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>🖼️ Chọn Từng Ảnh Lẻ</span>
+                  </button>
+                </div>
               </div>
             ) : filteredImages.length === 0 ? (
               <div className="text-center py-8 text-xs text-slate-500">
@@ -327,12 +388,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {collapsed && (
         <div className="flex-1 overflow-y-auto p-1 space-y-2 mt-2 flex flex-col items-center">
           <button
+            onClick={handleTriggerPickFolder}
+            className="w-10 h-10 rounded-xl bg-purple-600/20 border border-purple-500/40 text-purple-300 flex items-center justify-center hover:bg-purple-600 hover:text-white transition-all shadow"
+            title="Chọn cả thư mục ảnh"
+          >
+            <FolderOpen className="w-4 h-4" />
+          </button>
+
+          <button
             onClick={handleTriggerPickImages}
             className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 text-indigo-300 flex items-center justify-center hover:bg-indigo-600 hover:text-white transition-all shadow"
-            title="Thêm ảnh từ thiết bị"
+            title="Thêm ảnh lẻ từ thiết bị"
           >
             <ImagePlus className="w-4 h-4" />
           </button>
+
 
           {images.map((img) => (
             <div
