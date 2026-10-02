@@ -1,8 +1,9 @@
 {
   "appId": "com.khanhdocnope.mangastudio",
-  "appName": "Manga Studio AI",
+  "appName": "Manga Translator",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
   }
 }
+

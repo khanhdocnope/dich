@@ -47,51 +47,61 @@ jobs:
 
       - name: Prepare APK File
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk MangaStudio-v0.1.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk Manga-Translator.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Manga-Translator-${{ github.ref_name }}.apk"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MangaStudio-APK
-          path: MangaStudio-v0.1.apk
+          name: Manga-Translator-APK
+          path: |
+            Manga-Translator.apk
+            Manga-Translator-${{ github.ref_name }}.apk
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: MangaStudio-v0.1.apk
-          name: 🚀 Manga Studio AI ${{ github.ref_name }} (Android APK)
+          files: |
+            Manga-Translator.apk
+            Manga-Translator-${{ github.ref_name }}.apk
+          name: 🚀 Manga Translator ${{ github.ref_name }} (Android APK)
           body: |
-            # 🎨 Manga Studio AI - Phiên bản ${{ github.ref_name }}
+            # 🎨 Manga Translator - Phiên bản ${{ github.ref_name }}
 
-            Chào mừng bạn đến với phiên bản chính thức **Manga Studio AI ${{ github.ref_name }}** dành cho thiết bị Android & Web!
+            Chào mừng bạn đến với phiên bản chính thức **Manga Translator ${{ github.ref_name }}** dành cho thiết bị Android & Web!
 
-            [![Android APK](https://img.shields.io/badge/Download-Android_APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#download)
-            [![Capacitor](https://img.shields.io/badge/Capacitor-v7.0-119EFF?style=for-the-badge&logo=capacitor&logoColor=white)](#)
+            [![Android APK](https://img.shields.io/badge/Download-Manga_Translator_APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#download)
+            [![Capacitor](https://img.shields.io/badge/Capacitor-v8.5-119EFF?style=for-the-badge&logo=capacitor&logoColor=white)](#)
             [![License MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](#)
 
             ---
 
-            ### 🌟 Tính Năng Nổi Bật Bản Release
+            ### 🌟 Tính Năng Mới Trên Phiên Bản ${{ github.ref_name }}
 
-            - 📱 **Đóng gói Native Android (.apk)**: Tích hợp Capacitor SDK 7+, khởi chạy mượt mà như ứng dụng gốc trên smartphone và tablet Android.
-            - 🎯 **Giao diện Tối ưu Di Động (Mobile-First UI)**:
-              - **Drawer điều khiển thông minh**: Hỗ trợ vuốt mở/đóng danh sách ảnh và bảng tùy chỉnh ô thoại.
-              - **Touch Gestures & Wheel Zoom**: Phóng to, thu nhỏ, di chuyển ảnh mượt mà bằng cử chỉ chạm hoặc con trỏ.
-            - 🔤 **Bộ Font chữ Manga chuẩn 100% Việt Hóa**: Hỗ trợ đầy đủ tiếng Việt có dấu với các phông chữ comic như *Be Vietnam Pro, Mali, Comfortaa, Itim, Pangolin, Nunito...*
-            - 🤖 **Kết nối Colab AI Backend**:
-              - Mô hình xóa chữ **LaMa (Large Mask Inpainting)** siêu sạch.
-              - Nhận diện chữ **Manga-OCR** offline chống censorship.
-              - Dịch ngữ cảnh thông minh bằng **Gemini AI Vision**.
+            - 📁 **Chọn Cả Thư Mục Ảnh Đầu Vào (Input Folder Picker)**:
+              - Cho phép chọn toàn bộ thư mục chapter manga cùng lúc trên điện thoại & máy tính.
+              - **Tự động sắp xếp thứ tự trang tự nhiên (Natural Numerical Sort)**: `1.jpg, 2.jpg, ... 10.jpg` đúng chuẩn đọc truyện.
+            - 💾 **Tùy Chọn & Cài Đặt Thư Mục Lưu Kết Quả (Output Folder)**:
+              - Lưu trực tiếp kết quả vào bộ nhớ máy Android tại `Documents/MangaTranslator/[Chapter]`.
+              - Không bị popup hỏi lưu từng file khi chạy hàng loạt.
+            - 📦 **Đóng Gói Trọn Gói Thư Mục (.ZIP)**:
+              - Tải về toàn bộ các trang đã dịch dưới dạng 1 file nén `.ZIP` duy nhất với 1 chạm.
+            - 📱 **Đóng gói Native Android (.apk)**:
+              - Tên ứng dụng hiển thị trên màn hình: **Manga Translator**.
+              - Đầy đủ tính năng Offline-first với IndexedDB Storage và bộ font tiếng Việt 100%.
+            - 🤖 **Bộ đôi AI Đỉnh Cao**:
+              - Mô hình xóa chữ nền **LaMa (Large Mask Inpainting)** siêu sạch.
+              - Nhận diện chữ **Manga-OCR** offline không kiểm duyệt & **Gemini AI Vision** hiểu ngữ cảnh.
 
             ---
 
             ### 📲 Hướng Dẫn Cài Đặt File APK
 
-            1. Cuộn xuống phần **Assets** bên dưới và ấn vào **`MangaStudio-v0.1.apk`** để tải về.
+            1. Cuộn xuống phần **Assets** bên dưới và nhấn tải file **`Manga-Translator.apk`** hoặc **`Manga-Translator-${{ github.ref_name }}.apk`**.
             2. Mở file `.apk` đã tải trên điện thoại Android của bạn.
             3. Nếu thiết bị hỏi quyền cài đặt từ nguồn ngoài, hãy chọn **Cho phép (Allow)**.
-            4. Nhấn **Cài đặt (Install)** và trải nghiệm ứng dụng!
+            4. Nhấn **Cài đặt (Install)** và trải nghiệm dịch truyện không giới hạn!
 
             ---
             *📌 Được tự động đóng gói & xuất bản bởi **GitHub Actions & Capacitor CLI**.*
@@ -99,3 +109,4 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

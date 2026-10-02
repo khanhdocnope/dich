@@ -44,12 +44,13 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="header-brand-badge">
           <img src="/assets/app_icon.png" alt="Logo" className="w-5 h-5 rounded-md object-contain shrink-0 shadow-sm" />
           <span className="header-brand-title truncate">
-            Manga Studio AI
+            Manga Translator
           </span>
           <span className="header-brand-tag desktop-only">
-            LaMa
+            AI
           </span>
         </div>
+
 
         {currentFilename && (
           <div className="header-file-badge desktop-only">

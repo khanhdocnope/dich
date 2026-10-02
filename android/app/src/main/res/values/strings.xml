@@ -1,7 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Manga Studio AI</string>
-    <string name="title_activity_main">Manga Studio AI</string>
+    <string name="app_name">Manga Translator</string>
+    <string name="title_activity_main">Manga Translator</string>
     <string name="package_name">com.khanhdocnope.mangastudio</string>
     <string name="custom_url_scheme">com.khanhdocnope.mangastudio</string>
 </resources>
+
