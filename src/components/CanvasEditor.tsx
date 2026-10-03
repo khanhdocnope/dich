@@ -88,112 +88,72 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   // Image references & dimensions
   const rawImgRef = useRef<HTMLImageElement | null>(null);
   const cleanedImgRef = useRef<HTMLImageElement | null>(null);
+  const offscreenBgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animFrameIdRef = useRef<number | null>(null);
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number }>({ width: 800, height: 1200 });
 
-  // Keyboard Shortcuts (Space for Pan, Delete for Bubble, Ctrl+Z for Undo, Ctrl+Y for Redo)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isInput = ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName);
-      
-      if (!isInput && (e.ctrlKey || e.metaKey)) {
-        if (e.key === 'z' || e.key === 'Z') {
-          e.preventDefault();
-          if (e.shiftKey) {
-            onRedo?.();
-          } else {
-            onUndo?.();
-          }
-          return;
-        }
-        if (e.key === 'y' || e.key === 'Y') {
-          e.preventDefault();
-          onRedo?.();
-          return;
-        }
-      }
+  // Pre-render Offscreen Background Canvas (Blazing fast 60FPS blitting)
+  const updateOffscreenBg = useCallback(() => {
+    if (!rawImgRef.current) return;
+    const { width, height } = imgDimensions;
 
-      if (e.code === 'Space' && !isInput) {
-        setSpacePressed(true);
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedBubbleId && !isInput) {
-          onDeleteBubble(selectedBubbleId);
-        }
-      }
-      if (e.key === 'Escape') {
-        onSelectBubble(null);
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        setSpacePressed(false);
-        setIsPanning(false);
-      }
-    };
-
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [selectedBubbleId, onDeleteBubble, onSelectBubble]);
-
-  // Load Raw Image
-  useEffect(() => {
-    if (!rawImageUrl) {
-      rawImgRef.current = null;
-      return;
+    if (!offscreenBgCanvasRef.current) {
+      offscreenBgCanvasRef.current = document.createElement('canvas');
     }
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = rawImageUrl;
-    img.onload = () => {
-      rawImgRef.current = img;
-      setImgDimensions({ width: img.width, height: img.height });
-
-      if (maskCanvasRef.current) {
-        maskCanvasRef.current.width = img.width;
-        maskCanvasRef.current.height = img.height;
-        const mctx = maskCanvasRef.current.getContext('2d');
-        if (mctx) {
-          mctx.fillStyle = '#000000';
-          mctx.fillRect(0, 0, img.width, img.height);
-        }
-      }
-
-      // Center and fit nicely on load
-      if (containerRef.current) {
-        const cw = containerRef.current.clientWidth;
-        const ch = containerRef.current.clientHeight;
-        const scale = Math.min((cw - 40) / img.width, (ch - 60) / img.height, 1.0);
-        setZoom(scale);
-        setPan({
-          x: Math.max(10, (cw - img.width * scale) / 2),
-          y: Math.max(20, (ch - img.height * scale) / 2),
-        });
-      }
-    };
-  }, [rawImageUrl]);
-
-  // Load Cleaned Image (from LaMa)
-  useEffect(() => {
-    if (!cleanedImageBase64) {
-      cleanedImgRef.current = null;
-      return;
+    const bgCanvas = offscreenBgCanvasRef.current;
+    if (bgCanvas.width !== width || bgCanvas.height !== height) {
+      bgCanvas.width = width;
+      bgCanvas.height = height;
     }
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = cleanedImageBase64;
-    img.onload = () => {
-      cleanedImgRef.current = img;
-      renderCanvas();
-    };
-  }, [cleanedImageBase64]);
 
-  // Render Canvas
+    const bgCtx = bgCanvas.getContext('2d');
+    if (!bgCtx) return;
+
+    bgCtx.clearRect(0, 0, width, height);
+
+    if (viewLayer === 'original') {
+      bgCtx.drawImage(rawImgRef.current, 0, 0, width, height);
+    } else if (viewLayer === 'inpainted') {
+      const bgImg = cleanedImgRef.current || rawImgRef.current;
+      bgCtx.drawImage(bgImg, 0, 0, width, height);
+    } else if (viewLayer === 'rendered') {
+      const bgImg = cleanedImgRef.current || rawImgRef.current;
+      bgCtx.drawImage(bgImg, 0, 0, width, height);
+    } else if (viewLayer === 'split') {
+      const splitX = width * splitPos;
+      // Left side: Raw
+      bgCtx.save();
+      bgCtx.beginPath();
+      bgCtx.rect(0, 0, splitX, height);
+      bgCtx.clip();
+      bgCtx.drawImage(rawImgRef.current, 0, 0, width, height);
+      bgCtx.restore();
+
+      // Right side: Inpainted / Rendered
+      bgCtx.save();
+      bgCtx.beginPath();
+      bgCtx.rect(splitX, 0, width - splitX, height);
+      bgCtx.clip();
+      const bgImg = cleanedImgRef.current || rawImgRef.current;
+      bgCtx.drawImage(bgImg, 0, 0, width, height);
+      bgCtx.restore();
+
+      // Divider Line
+      bgCtx.beginPath();
+      bgCtx.moveTo(splitX, 0);
+      bgCtx.lineTo(splitX, height);
+      bgCtx.strokeStyle = '#6366f1';
+      bgCtx.lineWidth = 3;
+      bgCtx.stroke();
+    }
+  }, [imgDimensions, viewLayer, splitPos, cleanedImageBase64]);
+
+  // Update background offscreen canvas whenever background layer attributes change
+  useEffect(() => {
+    updateOffscreenBg();
+  }, [updateOffscreenBg, rawImageUrl, cleanedImageBase64]);
+
+  // Render Canvas with rAF Throttling
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !rawImgRef.current) return;
@@ -201,56 +161,29 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (!ctx) return;
 
     const { width, height } = imgDimensions;
-    canvas.width = width;
-    canvas.height = height;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
 
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Draw Background
-    if (viewLayer === 'original') {
-      ctx.drawImage(rawImgRef.current, 0, 0, width, height);
-    } else if (viewLayer === 'inpainted') {
+    // 1. Fast Blit Offscreen Background (Instant 60FPS+)
+    if (offscreenBgCanvasRef.current) {
+      ctx.drawImage(offscreenBgCanvasRef.current, 0, 0);
+    } else {
       const bgImg = cleanedImgRef.current || rawImgRef.current;
       ctx.drawImage(bgImg, 0, 0, width, height);
-    } else if (viewLayer === 'rendered') {
-      const bgImg = cleanedImgRef.current || rawImgRef.current;
-      ctx.drawImage(bgImg, 0, 0, width, height);
+    }
 
-      // Render all bubbles
+    // 2. Overlay Text Bubbles
+    if (viewLayer === 'rendered' || viewLayer === 'split') {
       bubbles.forEach((b) => {
         renderBubbleOnCanvas(ctx, b);
       });
-    } else if (viewLayer === 'split') {
-      const splitX = width * splitPos;
-
-      // Left side: Raw
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 0, splitX, height);
-      ctx.clip();
-      ctx.drawImage(rawImgRef.current, 0, 0, width, height);
-      ctx.restore();
-
-      // Right side: Rendered
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(splitX, 0, width - splitX, height);
-      ctx.clip();
-      const bgImg = cleanedImgRef.current || rawImgRef.current;
-      ctx.drawImage(bgImg, 0, 0, width, height);
-      bubbles.forEach((b) => renderBubbleOnCanvas(ctx, b));
-      ctx.restore();
-
-      // Divider Line
-      ctx.beginPath();
-      ctx.moveTo(splitX, 0);
-      ctx.lineTo(splitX, height);
-      ctx.strokeStyle = '#6366f1';
-      ctx.lineWidth = 3;
-      ctx.stroke();
     }
 
-    // 2. Overlay Mask Brush
+    // 3. Overlay Mask Brush
     if (activeTool === 'brush' && maskCanvasRef.current) {
       ctx.save();
       ctx.globalAlpha = 0.45;
@@ -258,7 +191,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.restore();
     }
 
-    // 3. Selection Outline & 8-point Resize Handles for Active Bubble
+    // 4. Selection Outline & 8-point Resize Handles for Active Bubble
     if (selectedBubbleId && viewLayer !== 'original') {
       const selected = bubbles.find((b) => b.id === selectedBubbleId);
       if (selected) {
@@ -295,11 +228,27 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         ctx.restore();
       }
     }
-  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, splitPos, zoom]);
+  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, zoom]);
+
+  // RequestAnimationFrame Throttled Render Schedule
+  const scheduleRender = useCallback(() => {
+    if (animFrameIdRef.current !== null) {
+      cancelAnimationFrame(animFrameIdRef.current);
+    }
+    animFrameIdRef.current = requestAnimationFrame(() => {
+      renderCanvas();
+      animFrameIdRef.current = null;
+    });
+  }, [renderCanvas]);
 
   useEffect(() => {
-    renderCanvas();
-  }, [renderCanvas, cleanedImageBase64]);
+    scheduleRender();
+    return () => {
+      if (animFrameIdRef.current !== null) {
+        cancelAnimationFrame(animFrameIdRef.current);
+      }
+    };
+  }, [scheduleRender, cleanedImageBase64]);
 
   // Screen to Canvas Coordinates
   const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {

@@ -101,10 +101,11 @@ export const importImagesFromFolderOrFiles = async (
     }
 
     try {
-      const dataUrl = await readFileAsDataURL(file);
+      const blobUrl = URL.createObjectURL(file);
       newItems.push({
         filename,
-        rawUrl: dataUrl,
+        rawUrl: blobUrl,
+        rawBlob: file,
         outputUrl: null,
         status: 'raw',
         metadata: {
@@ -218,9 +219,25 @@ export const exportImagesAsZip = async (
       const exportUrl = img.outputUrl || img.rawUrl;
       if (!exportUrl) continue;
 
-      const base64Data = exportUrl.replace(/^data:image\/[a-z]+;base64,/, '');
       const cleanName = img.filename.toLowerCase().endsWith('.png') ? img.filename : `${img.filename}.png`;
-      zip.file(cleanName, base64Data, { base64: true });
+
+      if (img.outputBlob) {
+        zip.file(cleanName, img.outputBlob);
+      } else if (img.rawBlob && !img.outputUrl) {
+        zip.file(cleanName, img.rawBlob);
+      } else if (exportUrl.startsWith('blob:')) {
+        try {
+          const res = await fetch(exportUrl);
+          const blob = await res.blob();
+          zip.file(cleanName, blob);
+        } catch {
+          const base64Data = exportUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+          zip.file(cleanName, base64Data, { base64: true });
+        }
+      } else {
+        const base64Data = exportUrl.replace(/^data:image\/[a-z]+;base64,/, '');
+        zip.file(cleanName, base64Data, { base64: true });
+      }
       count++;
     }
 

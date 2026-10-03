@@ -23,7 +23,7 @@ import {
   clearAllStoredImages,
   importImagesFromFolderOrFiles
 } from './services/api';
-import { loadSavedColabConfig, saveStoredColabConfig } from './services/storage';
+import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL } from './services/storage';
 import { 
   inpaintImageWithLaMa, 
   ocrBubbles, 
@@ -111,16 +111,26 @@ export const App: React.FC = () => {
     loadImages();
   }, [loadImages]);
 
-  // History Management for Undo / Redo
+  // History Management for Undo / Redo (RAM Optimized with Blob URLs & Max Cap)
   const [history, setHistory] = useState<Array<{ cleanedImageBase64: string | null; bubbles: Bubble[] }>>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const MAX_HISTORY_STEPS = 20;
 
   const pushHistory = useCallback((newCleaned: string | null, newBubbles: Bubble[]) => {
+    const safeCleaned = newCleaned ? createSafeObjectURL(newCleaned) : null;
     setHistory((prev) => {
       const updated = prev.slice(0, historyIndex + 1);
-      return [...updated, { cleanedImageBase64: newCleaned, bubbles: newBubbles }];
+      const nextList = [...updated, { cleanedImageBase64: safeCleaned, bubbles: newBubbles }];
+      if (nextList.length > MAX_HISTORY_STEPS) {
+        const removed = nextList.shift();
+        if (removed?.cleanedImageBase64 && removed.cleanedImageBase64.startsWith('blob:')) {
+          const stillUsed = nextList.some((item) => item.cleanedImageBase64 === removed.cleanedImageBase64);
+          if (!stillUsed) revokeSafeObjectURL(removed.cleanedImageBase64);
+        }
+      }
+      return nextList;
     });
-    setHistoryIndex((prev) => prev + 1);
+    setHistoryIndex((prev) => Math.min(prev + 1, MAX_HISTORY_STEPS - 1));
   }, [historyIndex]);
 
   const handleUndo = useCallback(() => {

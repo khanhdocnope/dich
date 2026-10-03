@@ -5,6 +5,62 @@ const DB_VERSION = 1;
 const STORE_IMAGES = 'images';
 
 /**
+ * Convert Base64 Data URL to Blob without creating extra V8 string garbage
+ */
+export const dataURLToBlob = (dataUrl: string): Blob => {
+  if (!dataUrl || !dataUrl.includes(',')) {
+    return new Blob([], { type: 'image/png' });
+  }
+  const parts = dataUrl.split(',');
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+};
+
+/**
+ * Convert Blob to Base64 Data URL only on-demand (e.g. for external AI server requests)
+ */
+export const blobToDataURL = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+};
+
+/**
+ * Create memory-efficient Object URL (blob:...) for graphics rendering
+ */
+export const createSafeObjectURL = (source: Blob | string): string => {
+  if (typeof source === 'string') {
+    if (source.startsWith('data:') && source.length > 500) {
+      const blob = dataURLToBlob(source);
+      return URL.createObjectURL(blob);
+    }
+    return source;
+  }
+  return URL.createObjectURL(source);
+};
+
+/**
+ * Revoke Object URL to immediately free RAM
+ */
+export const revokeSafeObjectURL = (url?: string | null) => {
+  if (url && url.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  }
+};
+
+/**
  * Initialize IndexedDB for offline-first image and metadata storage
  */
 export const openDB = (): Promise<IDBDatabase> => {
@@ -28,7 +84,7 @@ export const openDB = (): Promise<IDBDatabase> => {
 };
 
 /**
- * Get all stored images from IndexedDB
+ * Get all stored images from IndexedDB, converting Blob binaries to lightweight Object URLs
  */
 export const getAllStoredImages = async (): Promise<PageItem[]> => {
   try {
@@ -38,7 +94,33 @@ export const getAllStoredImages = async (): Promise<PageItem[]> => {
       const store = transaction.objectStore(STORE_IMAGES);
       const request = store.getAll();
 
-      request.onsuccess = () => resolve(request.result || []);
+      request.onsuccess = () => {
+        const items: PageItem[] = request.result || [];
+        const processed = items.map((item) => {
+          let rawUrl = item.rawUrl;
+          if (item.rawBlob) {
+            rawUrl = URL.createObjectURL(item.rawBlob);
+          }
+          let outputUrl = item.outputUrl;
+          if (item.outputBlob) {
+            outputUrl = URL.createObjectURL(item.outputBlob);
+          }
+          let metadata = item.metadata;
+          if (metadata && metadata.cleanedBlob) {
+            metadata = {
+              ...metadata,
+              cleanedImageBase64: URL.createObjectURL(metadata.cleanedBlob),
+            };
+          }
+          return {
+            ...item,
+            rawUrl,
+            outputUrl,
+            metadata,
+          };
+        });
+        resolve(processed);
+      };
       request.onerror = () => reject(request.error);
     });
   } catch (err) {
@@ -48,7 +130,7 @@ export const getAllStoredImages = async (): Promise<PageItem[]> => {
 };
 
 /**
- * Save or update a single image in IndexedDB
+ * Save or update a single image in IndexedDB with Blob binaries for zero Base64 bloat
  */
 export const saveStoredImage = async (item: PageItem): Promise<boolean> => {
   try {
@@ -56,8 +138,38 @@ export const saveStoredImage = async (item: PageItem): Promise<boolean> => {
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(STORE_IMAGES, 'readwrite');
       const store = transaction.objectStore(STORE_IMAGES);
-      const request = store.put(item);
 
+      // Clone item to avoid mutating in-memory object
+      const dbItem: any = { ...item };
+
+      // Convert rawUrl Base64 to Blob if needed
+      if (!dbItem.rawBlob && dbItem.rawUrl && dbItem.rawUrl.startsWith('data:')) {
+        dbItem.rawBlob = dataURLToBlob(dbItem.rawUrl);
+      }
+      // If rawUrl is a blob URL, don't store blob URL string in IDB
+      if (dbItem.rawUrl && dbItem.rawUrl.startsWith('blob:')) {
+        delete dbItem.rawUrl;
+      }
+
+      // Convert outputUrl Base64 to Blob if needed
+      if (!dbItem.outputBlob && dbItem.outputUrl && dbItem.outputUrl.startsWith('data:')) {
+        dbItem.outputBlob = dataURLToBlob(dbItem.outputUrl);
+      }
+      if (dbItem.outputUrl && dbItem.outputUrl.startsWith('blob:')) {
+        delete dbItem.outputUrl;
+      }
+
+      // Convert cleanedImageBase64 to Blob in metadata
+      if (dbItem.metadata && dbItem.metadata.cleanedImageBase64) {
+        if (dbItem.metadata.cleanedImageBase64.startsWith('data:')) {
+          dbItem.metadata.cleanedBlob = dataURLToBlob(dbItem.metadata.cleanedImageBase64);
+        }
+        if (dbItem.metadata.cleanedImageBase64.startsWith('blob:')) {
+          delete dbItem.metadata.cleanedImageBase64;
+        }
+      }
+
+      const request = store.put(dbItem);
       request.onsuccess = () => resolve(true);
       request.onerror = () => reject(request.error);
     });
@@ -77,7 +189,33 @@ export const saveMultipleStoredImages = async (items: PageItem[]): Promise<boole
       const transaction = db.transaction(STORE_IMAGES, 'readwrite');
       const store = transaction.objectStore(STORE_IMAGES);
 
-      items.forEach((item) => store.put(item));
+      items.forEach((item) => {
+        const dbItem: any = { ...item };
+        if (!dbItem.rawBlob && dbItem.rawUrl && dbItem.rawUrl.startsWith('data:')) {
+          dbItem.rawBlob = dataURLToBlob(dbItem.rawUrl);
+        }
+        if (dbItem.rawUrl && dbItem.rawUrl.startsWith('blob:')) {
+          delete dbItem.rawUrl;
+        }
+
+        if (!dbItem.outputBlob && dbItem.outputUrl && dbItem.outputUrl.startsWith('data:')) {
+          dbItem.outputBlob = dataURLToBlob(dbItem.outputUrl);
+        }
+        if (dbItem.outputUrl && dbItem.outputUrl.startsWith('blob:')) {
+          delete dbItem.outputUrl;
+        }
+
+        if (dbItem.metadata && dbItem.metadata.cleanedImageBase64) {
+          if (dbItem.metadata.cleanedImageBase64.startsWith('data:')) {
+            dbItem.metadata.cleanedBlob = dataURLToBlob(dbItem.metadata.cleanedImageBase64);
+          }
+          if (dbItem.metadata.cleanedImageBase64.startsWith('blob:')) {
+            delete dbItem.metadata.cleanedImageBase64;
+          }
+        }
+
+        store.put(dbItem);
+      });
 
       transaction.oncomplete = () => resolve(true);
       transaction.onerror = () => reject(transaction.error);
@@ -129,7 +267,7 @@ export const clearAllStoredImages = async (): Promise<boolean> => {
 };
 
 /**
- * Read File object as Base64 Data URL
+ * Read File object as Base64 Data URL (kept for API compatibility)
  */
 export const readFileAsDataURL = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -141,7 +279,7 @@ export const readFileAsDataURL = (file: File): Promise<string> => {
 };
 
 /**
- * Import files selected by user from Gallery / Storage and persist in IndexedDB
+ * Import files selected by user from Gallery / Storage using zero-copy Blobs and Object URLs
  */
 export const importImagesFromFiles = async (
   files: FileList | File[],
@@ -153,7 +291,7 @@ export const importImagesFromFiles = async (
 
   for (let i = 0; i < fileArray.length; i++) {
     const file = fileArray[i];
-    if (!file.type.startsWith('image/')) continue;
+    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|bmp|gif)$/i.test(file.name)) continue;
 
     let filename = file.name;
     // Handle name collision
@@ -166,10 +304,12 @@ export const importImagesFromFiles = async (
     existingNames.add(filename);
 
     try {
-      const dataUrl = await readFileAsDataURL(file);
+      // Zero-copy: Create Object URL directly from File object (Blob)
+      const blobUrl = URL.createObjectURL(file);
       const newItem: PageItem = {
         filename,
-        rawUrl: dataUrl,
+        rawUrl: blobUrl,
+        rawBlob: file,
         outputUrl: null,
         status: 'raw',
         metadata: {
@@ -179,7 +319,7 @@ export const importImagesFromFiles = async (
       };
       newItems.push(newItem);
     } catch (err) {
-      console.error(`Failed to read file ${file.name}:`, err);
+      console.error(`Failed to process file ${file.name}:`, err);
     }
   }
 
@@ -193,10 +333,10 @@ export const importImagesFromFiles = async (
 /**
  * Trigger file download directly to device (phone Gallery / Downloads / PC)
  */
-export const triggerDownloadImage = (filename: string, base64: string) => {
+export const triggerDownloadImage = (filename: string, base64OrBlobUrl: string) => {
   try {
     const link = document.createElement('a');
-    link.href = base64;
+    link.href = base64OrBlobUrl;
     const downloadName = filename.toLowerCase().endsWith('.png') ? filename : `${filename}.png`;
     link.download = downloadName;
     document.body.appendChild(link);
@@ -232,3 +372,4 @@ export const saveStoredColabConfig = (config: ColabConfig) => {
     console.warn('Could not save Colab config:', e);
   }
 };
+

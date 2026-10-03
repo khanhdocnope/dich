@@ -35,16 +35,21 @@ export interface Bubble {
   isInpainted: boolean;
 }
 
+export interface PageMetadata {
+  bubbles: Bubble[];
+  cleanedImageBase64?: string;
+  cleanedBlob?: Blob;
+  lastUpdated?: string;
+}
+
 export interface PageItem {
   filename: string;
   rawUrl: string;
+  rawBlob?: Blob;
   outputUrl: string | null;
+  outputBlob?: Blob;
   status: 'raw' | 'in_progress' | 'done';
-  metadata?: {
-    bubbles: Bubble[];
-    cleanedImageBase64?: string;
-    lastUpdated?: string;
-  } | null;
+  metadata?: PageMetadata | null;
 }
 
 export type EngineMode = 'gemini' | 'uncensored' | 'mock';

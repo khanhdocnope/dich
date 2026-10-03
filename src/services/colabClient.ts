@@ -19,6 +19,26 @@ export const checkColabHealth = async (serverUrl: string): Promise<{ online: boo
   }
 };
 
+const ensureBase64 = async (urlOrBase64: string): Promise<string> => {
+  if (!urlOrBase64) return '';
+  if (urlOrBase64.startsWith('blob:')) {
+    try {
+      const res = await fetch(urlOrBase64);
+      const blob = await res.blob();
+      return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.error('Failed to convert Blob URL to base64:', e);
+      return urlOrBase64;
+    }
+  }
+  return urlOrBase64;
+};
+
 export const inpaintImageWithLaMa = async (
   serverUrl: string,
   imageBase64: string,
@@ -28,13 +48,16 @@ export const inpaintImageWithLaMa = async (
 
   if (serverUrl) {
     try {
+      const payloadImg = await ensureBase64(imageBase64);
+      const payloadMask = await ensureBase64(maskBase64);
+
       const res = await fetch(`${cleanUrl}/api/inpaint`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'ngrok-skip-browser-warning': 'true',
         },
-        body: JSON.stringify({ imageBase64, maskBase64 }),
+        body: JSON.stringify({ imageBase64: payloadImg, maskBase64: payloadMask }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -51,7 +74,7 @@ export const inpaintImageWithLaMa = async (
       alert(`⚠️ Không thể kết nối đến Colab AI Server: ${e.message || 'Lỗi mạng'}\n👉 Vui lòng kiểm tra lại link Server URL ở nút "Colab GPU".`);
     }
   } else {
-    alert('⚠️ Bạn chưa kết nối Colab AI Server!\n👉 Hãy bấm vào nút "Colab GPU" ở trên thanh công cụ, mở Google Colab và dán URL vào để mô hình lama-manga-onnx tái tạo tranh.');
+    alert('⚠️ Bạn chưa kết nối Colab AI Server!\n👉 Hãy bấm vào nút "Colab GPU" ở trên thanh công cụ, mở Google Colab và dán URL vào để mô hình LaMa tái tạo tranh.');
   }
 
   // If server unavailable, return original image intact (do NOT fill white!)
@@ -68,6 +91,7 @@ export const ocrBubbles = async (
 
   if (config.connected && config.serverUrl) {
     try {
+      const payloadImg = await ensureBase64(imageBase64);
       const res = await fetch(`${cleanUrl}/api/ocr`, {
         method: 'POST',
         headers: {
@@ -75,7 +99,7 @@ export const ocrBubbles = async (
           'ngrok-skip-browser-warning': 'true',
         },
         body: JSON.stringify({
-          imageBase64,
+          imageBase64: payloadImg,
           boxes: bubbles.map((b) => ({ id: b.id, x: b.x, y: b.y, width: b.width, height: b.height })),
         }),
       });
