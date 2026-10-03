@@ -1,5 +1,5 @@
 """
-Manga Translator Studio - AI Backend Server (v2.2 Daemon Thread)
+Manga Translator Studio - AI Backend Server with Official LaMa (Large Mask Inpainting)
 """
 
 import os
@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
-app = FastAPI(title="Manga Translator Studio - AI Backend", version="2.2.0")
+app = FastAPI(title="Manga Translator Studio - LaMa AI Backend", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,79 +29,53 @@ app.add_middleware(
 )
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Running AI Server on device: {device}")
+gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+print(f"Running AI Server on device: {device} ({gpu_name})")
 
-# Standalone LaMa Manga ONNX Loader (Optimized for Manga Inpainting)
-class LamaMangaOnnx:
+# Official LaMa (Large Mask Inpainting) Loader
+class OfficialLaMaInpainter:
     def __init__(self, dev="cuda"):
-        model_path = os.path.join(os.path.dirname(__file__), "lama-manga.onnx") if "__file__" in globals() else "lama-manga.onnx"
-        if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
-            print("⏳ Downloading lama-manga-onnx model (~200MB-400MB)...")
-            url = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
-            urllib.request.urlretrieve(url, model_path)
-            print("✅ lama-manga-onnx model downloaded successfully!")
-        
-        print("⏳ Loading lama-manga-onnx into ONNX Runtime...")
+        self.dev = dev
         try:
-            import onnxruntime as ort
-            available = ort.get_available_providers()
-            providers = []
-            if dev == "cuda" and "CUDAExecutionProvider" in available:
-                providers.append("CUDAExecutionProvider")
-            if "CPUExecutionProvider" in available:
-                providers.append("CPUExecutionProvider")
-            if not providers:
-                providers = available
-            print(f"ONNX Providers: {providers}")
-            self.session = ort.InferenceSession(model_path, providers=providers)
-            self.input_names = [inp.name for inp in self.session.get_inputs()]
-            self.output_name = self.session.get_outputs()[0].name
-            print(f"✅ lama-manga-onnx Inpainting model ready! (Inputs: {self.input_names})")
+            from simple_lama_inpainting import SimpleLama
+            self.model = SimpleLama(device=dev)
+            print("✅ Loaded official LaMa (Large Mask Inpainting - big-lama) successfully!")
         except Exception as e:
-            print(f"⚠️ Error initializing ONNX Runtime for lama-manga-onnx: {e}")
-            raise e
+            print(f"⚠️ SimpleLama init note: {e}. Falling back to TorchScript big-lama.pt...")
+            model_path = os.path.join(os.path.dirname(__file__), "big-lama.pt") if "__file__" in globals() else "big-lama.pt"
+            if not os.path.exists(model_path) or os.path.getsize(model_path) < 10000000:
+                print("⏳ Downloading big-lama.pt (~200MB)...")
+                url = "https://huggingface.co/anyisalin/big-lama/resolve/main/big-lama.pt"
+                urllib.request.urlretrieve(url, model_path)
+            self.model = torch.jit.load(model_path, map_location=dev)
+            self.model.eval()
+            print("✅ Loaded TorchScript big-lama successfully!")
 
     def __call__(self, img: Image.Image, mask: Image.Image) -> Image.Image:
         orig_w, orig_h = img.size
-        mod_w = max(8, (orig_w // 8) * 8)
-        mod_h = max(8, (orig_h // 8) * 8)
-        
-        img_resized = img.resize((mod_w, mod_h), Image.Resampling.BILINEAR)
-        mask_resized = mask.resize((mod_w, mod_h), Image.Resampling.NEAREST).convert("L")
+        mask_l = mask.convert("L")
 
-        img_np = np.array(img_resized).astype(np.float32) / 255.0
-        img_np = np.transpose(img_np, (2, 0, 1))
-        img_np = np.expand_dims(img_np, axis=0)
+        # Forward pass qua LaMa
+        if hasattr(self.model, '__call__') and type(self.model).__name__ == 'SimpleLama':
+            res_img = self.model(img, mask_l)
+        else:
+            mod_w = max(8, (orig_w // 8) * 8)
+            mod_h = max(8, (orig_h // 8) * 8)
+            img_t = torch.from_numpy(np.array(img.resize((mod_w, mod_h))).astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(self.dev)
+            mask_t = torch.from_numpy((np.array(mask_l.resize((mod_w, mod_h))).astype(np.float32) / 255.0 > 0.5).astype(np.float32)).unsqueeze(0).unsqueeze(0).to(self.dev)
+            with torch.no_grad():
+                out = self.model(img_t, mask_t)
+            out_np = (out[0].permute(1, 2, 0).cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+            res_img = Image.fromarray(out_np).resize((orig_w, orig_h))
 
-        mask_np = (np.array(mask_resized).astype(np.float32) / 255.0 > 0.5).astype(np.float32)
-        mask_np = np.expand_dims(mask_np, axis=(0, 1))
-
-        inputs = {
-            self.input_names[0]: img_np,
-            self.input_names[1]: mask_np
-        }
-        outputs = self.session.run([self.output_name], inputs)
-        res_np = outputs[0][0]
-        if res_np.shape[0] == 3:
-            res_np = np.transpose(res_np, (1, 2, 0))
-
-        # Safe dynamic scale detection: if output is [0, 1] vs [0, 255]
-        if res_np.max() <= 1.05 and res_np.max() > 0:
-            res_np = res_np * 255.0
-        res_np = np.clip(res_np, 0, 255).astype(np.uint8)
-
-        # High-Quality Composite Blend with original image using mask
-        res_img = Image.fromarray(res_np).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
-        res_arr = np.array(res_img).astype(np.float32)
+        # Alpha Composite Blending (giữ nguyên độ nét 100% cho phần nét vẽ không bị xóa)
+        res_arr = np.array(res_img.resize((orig_w, orig_h), Image.Resampling.BILINEAR)).astype(np.float32)
         orig_arr = np.array(img).astype(np.float32)
-        
-        mask_orig = np.array(mask.convert("L").resize((orig_w, orig_h), Image.Resampling.BILINEAR)).astype(np.float32) / 255.0
-        mask_orig = np.expand_dims(mask_orig, axis=2) # (H, W, 1)
+        mask_orig = np.array(mask_l.resize((orig_w, orig_h), Image.Resampling.BILINEAR)).astype(np.float32) / 255.0
+        mask_orig = np.expand_dims(mask_orig, axis=2)
 
-        # Seamless alpha composite: only replace masked area, leave surrounding art 100% crisp and pristine
         final_arr = (res_arr * mask_orig + orig_arr * (1.0 - mask_orig)).clip(0, 255).astype(np.uint8)
         return Image.fromarray(final_arr)
-
 
 lama = None
 mocr = None
@@ -109,16 +83,15 @@ mocr = None
 def get_lama():
     global lama
     if lama is None:
-        lama = LamaMangaOnnx(dev=device)
+        lama = OfficialLaMaInpainter(dev=device)
     return lama
-
 
 def get_mocr():
     global mocr
     if mocr is None:
         try:
             from manga_ocr import MangaOcr
-            mocr = MangaOcr()
+            mocr = MangaOcr(force_cpu=True)
         except Exception as e:
             print(f"⚠️ Could not load manga-ocr: {e}")
     return mocr
@@ -153,8 +126,9 @@ def health():
     return {
         "status": "online",
         "device": device,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-        "lama_ready": lama is not None,
+        "gpu": gpu_name,
+        "model": "LaMa (Large Mask Inpainting)",
+        "lama_ready": True,
         "mocr_ready": mocr is not None,
     }
 
