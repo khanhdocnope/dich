@@ -175,8 +175,10 @@ export const renderBubbleOnCanvas = (
     const lineY = startY + index * lineHeight;
 
     if (style.strokeWidth > 0 && style.strokeColor) {
+      // Prevent stroke from overpowering small text and turning into a solid black smudge
+      const safeStrokeWidth = Math.min(style.strokeWidth, Math.max(1, finalFontSize * 0.22));
       ctx.strokeStyle = style.strokeColor;
-      ctx.lineWidth = style.strokeWidth;
+      ctx.lineWidth = safeStrokeWidth;
       ctx.lineJoin = 'round';
       ctx.miterLimit = 2;
       ctx.strokeText(line, textX, lineY);

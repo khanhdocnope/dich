@@ -428,7 +428,14 @@ export const App: React.FC = () => {
       if (targetBubbles.length === 0) {
         setProcessingStatus('🔍 [1/3] Đang tự động nhận diện các ô thoại trên trang...');
         targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
-        setBubbles(targetBubbles);
+        if (targetBubbles.length > 0) {
+          setBubbles(targetBubbles);
+        } else {
+          setIsProcessing(false);
+          setProcessingStatus('');
+          alert('💡 Chưa phát hiện được ô thoại tự động!\n👉 Bạn có thể dùng chuột kéo vẽ trực tiếp trên tranh để tạo ô thoại (hoặc kết nối Colab GPU / nhập Gemini API Key để AI đọc ảnh).');
+          return;
+        }
       }
 
       // Step 2: LaMa Inpainting

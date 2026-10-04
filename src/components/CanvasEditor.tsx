@@ -87,6 +87,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [editingBubbleId, setEditingBubbleId] = useState<string | null>(null);
   const [inlineEditText, setInlineEditText] = useState<string>('');
 
+  // ✏️ Drag-to-Draw New Bubble States
+  const [isDrawingNewBubble, setIsDrawingNewBubble] = useState<boolean>(false);
+  const [drawStartPos, setDrawStartPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [currentDrawBox, setCurrentDrawBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [dynamicCursor, setDynamicCursor] = useState<string>('default');
+
   // Image references & dimensions
   const rawImgRef = useRef<HTMLImageElement | null>(null);
   const cleanedImgRef = useRef<HTMLImageElement | null>(null);
@@ -225,7 +231,25 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         ctx.restore();
       }
     }
-  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, zoom]);
+
+    // 5. Live Drag-to-Draw Preview Box
+    if (isDrawingNewBubble && currentDrawBox) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.22)';
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 2 / zoom;
+      ctx.setLineDash([6 / zoom, 4 / zoom]);
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height, 8);
+      } else {
+        ctx.rect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height);
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, zoom, isDrawingNewBubble, currentDrawBox]);
 
   // RequestAnimationFrame Throttled Render Schedule
   const scheduleRender = useCallback(() => {
@@ -319,10 +343,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     scheduleRender();
   }, [updateOffscreenBg, scheduleRender, viewLayer, splitPos]);
 
-  // 4. Render overlay elements (bubbles, active tool) without re-drawing offscreen background
+  // 4. Render overlay elements (bubbles, active tool, live drag box) without re-drawing offscreen background
   useEffect(() => {
     scheduleRender();
-  }, [scheduleRender, bubbles, selectedBubbleId, activeTool]);
+  }, [scheduleRender, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox]);
 
   useEffect(() => {
     return () => {
@@ -428,22 +452,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       return;
     }
 
-    // Add Bubble Tool: Create new bubble
+    // Add Bubble Tool: Start Drag-to-Draw box directly on canvas
     if (activeTool === 'add_bubble') {
-      const newBubble: Bubble = {
-        id: `bubble_${Date.now()}`,
-        x: Math.max(0, x - 70),
-        y: Math.max(0, y - 45),
-        width: 140,
-        height: 90,
-        originalText: '',
-        translatedText: 'Nhập chữ...',
-        style: { ...defaultTextStyle },
-        isInpainted: false,
-      };
-      onAddBubble(newBubble);
-      onSelectBubble(newBubble.id);
-      setActiveTool('select');
+      setIsDrawingNewBubble(true);
+      setDrawStartPos({ x, y });
+      setCurrentDrawBox({ x, y, width: 0, height: 0 });
       return;
     }
 
@@ -513,6 +526,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
     const { x, y } = getCanvasCoords(e);
 
+    // Drag-to-Draw New Bubble
+    if (isDrawingNewBubble) {
+      const minX = Math.min(x, drawStartPos.x);
+      const minY = Math.min(y, drawStartPos.y);
+      const w = Math.abs(x - drawStartPos.x);
+      const h = Math.abs(y - drawStartPos.y);
+      setCurrentDrawBox({ x: minX, y: minY, width: w, height: h });
+      return;
+    }
+
     if (isBrushing && activeTool === 'brush') {
       paintMask(x, y);
       return;
@@ -569,6 +592,50 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         width: Math.round(newW),
         height: Math.round(newH),
       });
+      return;
+    }
+
+    // Dynamic Hover Cursor Detection
+    if (activeTool === 'select') {
+      if (selectedBubbleId) {
+        const selected = bubbles.find((b) => b.id === selectedBubbleId);
+        if (selected) {
+          const threshold = 14 / zoom;
+          const handles: { [key: string]: { x: number; y: number } } = {
+            nw: { x: selected.x, y: selected.y },
+            ne: { x: selected.x + selected.width, y: selected.y },
+            se: { x: selected.x + selected.width, y: selected.y + selected.height },
+            sw: { x: selected.x, y: selected.y + selected.height },
+            e:  { x: selected.x + selected.width, y: selected.y + selected.height / 2 },
+            w:  { x: selected.x, y: selected.y + selected.height / 2 },
+            s:  { x: selected.x + selected.width / 2, y: selected.y + selected.height },
+            n:  { x: selected.x + selected.width / 2, y: selected.y },
+          };
+
+          for (const [key, pos] of Object.entries(handles)) {
+            if (Math.hypot(x - pos.x, y - pos.y) <= threshold) {
+              if (key === 'nw' || key === 'se') setDynamicCursor('nwse-resize');
+              else if (key === 'ne' || key === 'sw') setDynamicCursor('nesw-resize');
+              else if (key === 'n' || key === 's') setDynamicCursor('ns-resize');
+              else if (key === 'e' || key === 'w') setDynamicCursor('ew-resize');
+              return;
+            }
+          }
+          if (x >= selected.x && x <= selected.x + selected.width && y >= selected.y && y <= selected.y + selected.height) {
+            setDynamicCursor('move');
+            return;
+          }
+        }
+      }
+
+      // Check if hovering over another bubble
+      const isHoveringOther = bubbles.some((b) => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
+      if (isHoveringOther) {
+        setDynamicCursor('pointer');
+        return;
+      }
+
+      setDynamicCursor('default');
     }
   };
 
@@ -578,6 +645,30 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     setIsResizingBubble(false);
     setIsBrushing(false);
     setResizeHandle(null);
+
+    // Finalize Drag-to-Draw New Bubble
+    if (isDrawingNewBubble) {
+      setIsDrawingNewBubble(false);
+      const box = currentDrawBox;
+      setCurrentDrawBox(null);
+      if (box) {
+        const isClickOnly = box.width < 15 && box.height < 15;
+        const newBubble: Bubble = {
+          id: `bubble_${Date.now()}`,
+          x: isClickOnly ? Math.max(0, drawStartPos.x - 70) : box.x,
+          y: isClickOnly ? Math.max(0, drawStartPos.y - 45) : box.y,
+          width: isClickOnly ? 140 : Math.max(30, box.width),
+          height: isClickOnly ? 90 : Math.max(20, box.height),
+          originalText: '',
+          translatedText: 'Nhập chữ...',
+          style: { ...defaultTextStyle },
+          isInpainted: false,
+        };
+        onAddBubble(newBubble);
+        onSelectBubble(newBubble.id);
+        setActiveTool('select');
+      }
+    }
   };
 
   // Double Click for Direct Inline Text Editing
@@ -986,11 +1077,19 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           onDoubleClick={handleDoubleClick}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onContextMenu={(e) => e.preventDefault()}
-          className={`flex-1 w-full h-full overflow-hidden relative ${
-            spacePressed || isPanning ? 'cursor-grab' : activeTool === 'brush' ? 'cursor-crosshair' : 'cursor-default'
-          }`}
+          className="flex-1 w-full h-full overflow-hidden relative"
+          style={{
+            cursor:
+              spacePressed || isPanning
+                ? isPanning
+                  ? 'grabbing'
+                  : 'grab'
+                : activeTool === 'brush' || activeTool === 'add_bubble' || isDrawingNewBubble
+                ? 'crosshair'
+                : dynamicCursor !== 'default'
+                ? dynamicCursor
+                : 'default',
+          }}
         >
           <div
             style={{

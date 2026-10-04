@@ -309,23 +309,7 @@ Return ONLY valid JSON array:
     }
   }
 
-  // 3. Fallback Smart Grid Layout Generator (Never let the user be stuck with 0 bubbles)
-  const defaultLayouts = [
-    { x: Math.round(imgWidth * 0.58), y: Math.round(imgHeight * 0.08), width: Math.round(imgWidth * 0.32), height: Math.round(imgHeight * 0.14), text: 'Này, cậu có sao không!?', orig: 'おい、大丈夫か！？' },
-    { x: Math.round(imgWidth * 0.12), y: Math.round(imgHeight * 0.32), width: Math.round(imgWidth * 0.34), height: Math.round(imgHeight * 0.15), text: 'Tớ không sao, chỉ là...', orig: '平気だよ、ただ…' },
-    { x: Math.round(imgWidth * 0.48), y: Math.round(imgHeight * 0.62), width: Math.round(imgWidth * 0.38), height: Math.round(imgHeight * 0.16), text: 'Nhanh lên, chúng ta phải đi thôi!', orig: '早く、行かないと！' },
-  ];
-
-  return defaultLayouts.map((d, idx): Bubble => ({
-    id: `auto_fallback_${Date.now()}_${idx}`,
-    x: d.x,
-    y: d.y,
-    width: d.width,
-    height: d.height,
-    originalText: d.orig,
-    translatedText: d.text,
-    style: { ...defaultTextStyle },
-    isInpainted: false,
-  }));
+  // 3. If neither Gemini nor Colab detected bubbles, return empty array cleanly
+  return [];
 };
 
