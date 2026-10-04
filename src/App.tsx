@@ -27,7 +27,8 @@ import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revok
 import { 
   inpaintImageWithLaMa, 
   ocrBubbles, 
-  translateBubbles 
+  translateBubbles,
+  detectAndTranslatePageAuto
 } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
 
@@ -43,6 +44,7 @@ export const App: React.FC = () => {
   // Status & Progress States
   const [isLoadingImages, setIsLoadingImages] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
 
   // Mobile Drawer States
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
@@ -320,14 +322,11 @@ export const App: React.FC = () => {
   // 1. Action: AI LaMa Manga inpainting ONLY (Xóa chữ tái tạo nền)
   const handleRunAutoCleanOnly = async () => {
     if (!selectedFilename || !currentImage) return;
-    if (bubbles.length === 0) {
-      alert('⚠️ Chưa có ô thoại nào trên trang!\nHãy bấm "Thêm Ô (B)" để bao quanh chữ cần xóa hoặc dùng "Cọ LaMa" để quét.');
-      return;
-    }
 
     setIsProcessing(true);
+    setProcessingStatus('🧼 Đang xóa chữ & tái tạo nền bằng LaMa...');
     try {
-      const maskCanvas = document.createElement('canvas');
+      let targetBubbles = bubbles;
       const img = new Image();
       img.crossOrigin = 'anonymous';
       await new Promise((res) => {
@@ -335,6 +334,14 @@ export const App: React.FC = () => {
         img.src = currentImage.rawUrl;
       });
 
+      // If no bubbles exist yet, auto detect them first
+      if (targetBubbles.length === 0) {
+        setProcessingStatus('🔍 Đang tự động tìm vị trí chữ trên trang...');
+        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
+        setBubbles(targetBubbles);
+      }
+
+      const maskCanvas = document.createElement('canvas');
       maskCanvas.width = img.width;
       maskCanvas.height = img.height;
       const mctx = maskCanvas.getContext('2d');
@@ -342,68 +349,93 @@ export const App: React.FC = () => {
         mctx.fillStyle = '#000000';
         mctx.fillRect(0, 0, img.width, img.height);
         mctx.fillStyle = '#ffffff';
-        bubbles.forEach((b) => {
+        targetBubbles.forEach((b) => {
           mctx.beginPath();
           mctx.roundRect(b.x, b.y, b.width, b.height, 8);
           mctx.fill();
         });
       }
 
+      setProcessingStatus('🧼 Đang chạy mô hình LaMa tái tạo nét vẽ...');
       const maskBase64 = maskCanvas.toDataURL('image/png');
       const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
       const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
 
       if (cleaned && cleaned !== sourceImg) {
-        pushHistory(cleaned, bubbles);
+        pushHistory(cleaned, targetBubbles);
         setCleanedImageBase64(cleaned);
-        await saveProjectMetadata(selectedFilename, bubbles, cleaned);
+        await saveProjectMetadata(selectedFilename, targetBubbles, cleaned);
       }
     } catch (e) {
       console.error('Auto clean failed:', e);
     } finally {
       setIsProcessing(false);
+      setProcessingStatus('');
     }
   };
 
   // 2. Action: Translate ONLY (Dịch văn bản bằng Gemini / Manga-OCR)
   const handleRunTranslateOnly = async () => {
     if (!selectedFilename || !currentImage) return;
-    if (bubbles.length === 0) {
-      alert('⚠️ Chưa có ô thoại nào để dịch!\nHãy bấm "Thêm Ô (B)" để tạo ô thoại quanh lời thoại nhân vật.');
-      return;
-    }
 
     setIsProcessing(true);
+    setProcessingStatus('🔍 Đang nhận diện & dịch câu thoại...');
     try {
-      const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, bubbles);
-      const translatedResultBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
+      let targetBubbles = bubbles;
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((res) => {
+        img.onload = res;
+        img.src = currentImage.rawUrl;
+      });
 
-      pushHistory(cleanedImageBase64, translatedResultBubbles);
-      setBubbles(translatedResultBubbles);
-      await saveProjectMetadata(selectedFilename, translatedResultBubbles, cleanedImageBase64 || undefined);
+      if (targetBubbles.length === 0) {
+        setProcessingStatus('🔍 Đang tự động quét ô thoại & dịch sang tiếng Việt...');
+        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
+      } else {
+        setProcessingStatus('🌐 Đang dịch nội dung sang tiếng Việt...');
+        const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, targetBubbles);
+        targetBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
+      }
+
+      pushHistory(cleanedImageBase64, targetBubbles);
+      setBubbles(targetBubbles);
+      await saveProjectMetadata(selectedFilename, targetBubbles, cleanedImageBase64 || undefined);
     } catch (e) {
       console.error('Translation failed:', e);
     } finally {
       setIsProcessing(false);
+      setProcessingStatus('');
     }
   };
 
-  // 3. Action: Full Auto (Xóa nền LaMa + Dịch)
+  // 3. Action: ⚡ TRUE 1-CLICK AUTO TRANSLATE (Auto Detect + LaMa Inpaint + Translate)
   const handleRunAutoCleanAndTranslate = async () => {
     if (!selectedFilename || !currentImage) return;
 
     setIsProcessing(true);
     try {
-      let cleaned = cleanedImageBase64;
-      if (bubbles.length > 0) {
-        const maskCanvas = document.createElement('canvas');
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        await new Promise((res) => {
-          img.onload = res;
-          img.src = currentImage.rawUrl;
-        });
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((res) => {
+        img.onload = res;
+        img.src = currentImage.rawUrl;
+      });
 
+      let targetBubbles = bubbles;
+
+      // Step 1: Auto-detect bubbles if user hasn't drawn any
+      if (targetBubbles.length === 0) {
+        setProcessingStatus('🔍 [1/3] Đang tự động nhận diện các ô thoại trên trang...');
+        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
+        setBubbles(targetBubbles);
+      }
+
+      // Step 2: LaMa Inpainting
+      let cleaned = cleanedImageBase64;
+      if (targetBubbles.length > 0) {
+        setProcessingStatus('🧼 [2/3] Đang dùng LaMa xóa chữ & tái tạo nền tranh...');
+        const maskCanvas = document.createElement('canvas');
         maskCanvas.width = img.width;
         maskCanvas.height = img.height;
         const mctx = maskCanvas.getContext('2d');
@@ -411,7 +443,7 @@ export const App: React.FC = () => {
           mctx.fillStyle = '#000000';
           mctx.fillRect(0, 0, img.width, img.height);
           mctx.fillStyle = '#ffffff';
-          bubbles.forEach((b) => {
+          targetBubbles.forEach((b) => {
             mctx.beginPath();
             mctx.roundRect(b.x, b.y, b.width, b.height, 8);
             mctx.fill();
@@ -426,8 +458,9 @@ export const App: React.FC = () => {
         }
       }
 
-      // OCR & Translation
-      const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, bubbles);
+      // Step 3: OCR & Translation refinement if needed
+      setProcessingStatus('✍️ [3/3] Đang hoàn thiện bản dịch tiếng Việt...');
+      const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, targetBubbles);
       const translatedResultBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
 
       pushHistory(cleaned || null, translatedResultBubbles);
@@ -437,6 +470,7 @@ export const App: React.FC = () => {
       console.error('Auto clean and translate failed:', e);
     } finally {
       setIsProcessing(false);
+      setProcessingStatus('');
     }
   };
 
@@ -557,6 +591,7 @@ export const App: React.FC = () => {
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         isProcessing={isProcessing}
+        processingStatus={processingStatus}
         onEngineChange={(mode: EngineMode) =>
           handleSaveColabConfig({ ...colabConfig, engineMode: mode })
         }

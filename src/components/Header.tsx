@@ -31,6 +31,7 @@ interface HeaderProps {
   canUndo?: boolean;
   canRedo?: boolean;
   isProcessing: boolean;
+  processingStatus?: string;
   onEngineChange: (mode: EngineMode) => void;
 }
 
@@ -50,6 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
   canUndo = false,
   canRedo = false,
   isProcessing,
+  processingStatus,
   onEngineChange,
 }) => {
 
@@ -172,20 +174,32 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* Action 1: AI Xóa Chữ (LaMa Manga Inpainting) */}
+        {/* Action 1: ⚡ 1-CHẠM TỰ ĐỘNG TOÀN TRANG (Detect + LaMa Clean + Translate) */}
+        <button
+          onClick={onRunAutoCleanAndTranslate}
+          disabled={!currentFilename || isProcessing}
+          className={`btn-primary desktop-only ${isProcessing ? 'animate-pulse' : ''}`}
+          style={{ background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%)' }}
+          title="Tự động phát hiện ô thoại, xóa nền bằng LaMa và Dịch toàn bộ trang trong 1 chạm duy nhất"
+        >
+          <Sparkles className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
+          <span className="font-semibold">{isProcessing ? (processingStatus || 'Đang xử lý...') : '⚡ Dịch 1-Chạm (Tự Động)'}</span>
+        </button>
+
+        {/* Action 2: AI Xóa Chữ (LaMa Manga Inpainting) */}
         {onRunAutoCleanOnly && (
           <button
             onClick={onRunAutoCleanOnly}
             disabled={!currentFilename || isProcessing}
             className="btn-secondary desktop-only border-red-500/30 text-red-300 hover:bg-red-500/20"
-            title="Dùng AI LaMa Manga trên Colab để xóa sạch chữ và tái tạo nền tranh"
+            title="Dùng AI LaMa trên Colab để xóa sạch chữ và tái tạo nền tranh"
           >
             <Eraser className="w-3.5 h-3.5 text-red-400" />
             <span>Xóa Nền LaMa</span>
           </button>
         )}
 
-        {/* Action 2: Dịch Chữ (Gemini Vision / Manga-OCR) */}
+        {/* Action 3: Dịch Chữ (Gemini Vision / Manga-OCR) */}
         {onRunTranslateOnly && (
           <button
             onClick={onRunTranslateOnly}
@@ -194,20 +208,9 @@ export const Header: React.FC<HeaderProps> = ({
             title="Nhận diện chữ và dịch câu thoại sang tiếng Việt"
           >
             <Languages className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Dịch Văn Bản</span>
+            <span>Dịch Chữ</span>
           </button>
         )}
-
-        {/* Action 3: Tự động tất cả (Xóa & Dịch) */}
-        <button
-          onClick={onRunAutoCleanAndTranslate}
-          disabled={!currentFilename || isProcessing}
-          className="btn-primary desktop-only"
-          title="Tự động xóa nền bằng LaMa và Dịch toàn bộ trang hiện tại"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>{isProcessing ? 'Đang xử lý...' : 'Tự Động Tất Cả'}</span>
-        </button>
 
         {/* Batch Process All */}
         <button

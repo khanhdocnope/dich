@@ -78,12 +78,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [brushSize, setBrushSize] = useState<number>(35);
   const [isBrushing, setIsBrushing] = useState<boolean>(false);
 
-  // Bubble Manipulation
+  // Bubble Manipulation & Inline Editing
   const [isDraggingBubble, setIsDraggingBubble] = useState<boolean>(false);
   const [isResizingBubble, setIsResizingBubble] = useState<boolean>(false);
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [bubbleInitialPos, setBubbleInitialPos] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [editingBubbleId, setEditingBubbleId] = useState<string | null>(null);
+  const [inlineEditText, setInlineEditText] = useState<string>('');
 
   // Image references & dimensions
   const rawImgRef = useRef<HTMLImageElement | null>(null);
@@ -146,12 +148,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       bgCtx.lineWidth = 3;
       bgCtx.stroke();
     }
-  }, [imgDimensions, viewLayer, splitPos, cleanedImageBase64]);
-
-  // Update background offscreen canvas whenever background layer attributes change
-  useEffect(() => {
-    updateOffscreenBg();
-  }, [updateOffscreenBg, rawImageUrl, cleanedImageBase64]);
+  }, [imgDimensions, viewLayer, splitPos]);
 
   // Render Canvas with rAF Throttling
   const renderCanvas = useCallback(() => {
@@ -241,14 +238,168 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     });
   }, [renderCanvas]);
 
+  // 1. Load Raw Image whenever rawImageUrl changes
+  useEffect(() => {
+    if (!rawImageUrl) {
+      rawImgRef.current = null;
+      if (offscreenBgCanvasRef.current) {
+        const bgCtx = offscreenBgCanvasRef.current.getContext('2d');
+        if (bgCtx) bgCtx.clearRect(0, 0, offscreenBgCanvasRef.current.width, offscreenBgCanvasRef.current.height);
+      }
+      scheduleRender();
+      return;
+    }
+
+    let isMounted = true;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (!isMounted) return;
+      rawImgRef.current = img;
+      const dims = { width: img.naturalWidth || 800, height: img.naturalHeight || 1200 };
+      setImgDimensions(dims);
+
+      // Auto-fit initial view centered in container
+      if (containerRef.current) {
+        const cw = containerRef.current.clientWidth || 800;
+        const ch = containerRef.current.clientHeight || 900;
+        const scaleX = (cw - 60) / dims.width;
+        const scaleY = (ch - 60) / dims.height;
+        const fitZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.15), 1.5);
+        setZoom(fitZoom);
+        setPan({
+          x: Math.round((cw - dims.width * fitZoom) / 2),
+          y: Math.round((ch - dims.height * fitZoom) / 2),
+        });
+      }
+
+      if (maskCanvasRef.current) {
+        maskCanvasRef.current.width = dims.width;
+        maskCanvasRef.current.height = dims.height;
+      }
+
+      updateOffscreenBg();
+      scheduleRender();
+    };
+    img.src = rawImageUrl;
+
+    return () => {
+      isMounted = false;
+    };
+  }, [rawImageUrl, updateOffscreenBg, scheduleRender]);
+
+  // 2. Load Cleaned/Inpainted Image whenever cleanedImageBase64 changes
+  useEffect(() => {
+    if (!cleanedImageBase64) {
+      cleanedImgRef.current = null;
+      updateOffscreenBg();
+      scheduleRender();
+      return;
+    }
+
+    let isMounted = true;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (!isMounted) return;
+      cleanedImgRef.current = img;
+      updateOffscreenBg();
+      scheduleRender();
+    };
+    img.src = cleanedImageBase64;
+
+    return () => {
+      isMounted = false;
+    };
+  }, [cleanedImageBase64, updateOffscreenBg, scheduleRender]);
+
+  // 3. Update background buffer only when layer configuration changes
+  useEffect(() => {
+    updateOffscreenBg();
+    scheduleRender();
+  }, [updateOffscreenBg, scheduleRender, viewLayer, splitPos]);
+
+  // 4. Render overlay elements (bubbles, active tool) without re-drawing offscreen background
   useEffect(() => {
     scheduleRender();
+  }, [scheduleRender, bubbles, selectedBubbleId, activeTool]);
+
+  useEffect(() => {
     return () => {
       if (animFrameIdRef.current !== null) {
         cancelAnimationFrame(animFrameIdRef.current);
       }
     };
-  }, [scheduleRender, cleanedImageBase64]);
+  }, []);
+
+  // 5. Ultra-Smooth 60/120FPS Native Non-Passive Mouse Wheel Zoom Centered on Cursor
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const factor = e.ctrlKey ? Math.exp(-e.deltaY * 0.01) : (e.deltaY < 0 ? 1.14 : 0.88);
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      setZoom((prevZoom) => {
+        const nextZoom = Math.min(Math.max(prevZoom * factor, 0.08), 5.0);
+        setPan((prevPan) => ({
+          x: mouseX - (mouseX - prevPan.x) * (nextZoom / prevZoom),
+          y: mouseY - (mouseY - prevPan.y) * (nextZoom / prevZoom),
+        }));
+        return nextZoom;
+      });
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', onWheel);
+    };
+  }, [rawImageUrl]);
+
+  // Spacebar pan listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !spacePressed && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        setSpacePressed(true);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [spacePressed]);
+
+  // Zoom by factor centered on screen (used by toolbar buttons)
+  const handleZoomBy = (factor: number) => {
+    if (!containerRef.current) return;
+    const cw = containerRef.current.clientWidth;
+    const ch = containerRef.current.clientHeight;
+    const centerX = cw / 2;
+    const centerY = ch / 2;
+
+    setZoom((prevZoom) => {
+      const nextZoom = Math.min(Math.max(prevZoom * factor, 0.08), 5.0);
+      setPan((prevPan) => ({
+        x: centerX - (centerX - prevPan.x) * (nextZoom / prevZoom),
+        y: centerY - (centerY - prevPan.y) * (nextZoom / prevZoom),
+      }));
+      return nextZoom;
+    });
+  };
 
   // Screen to Canvas Coordinates
   const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -257,25 +408,6 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     const x = (e.clientX - rect.left) / zoom;
     const y = (e.clientY - rect.top) / zoom;
     return { x: Math.round(x), y: Math.round(y) };
-  };
-
-  // Smooth Mouse Wheel Zoom Centered on Cursor
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (!containerRef.current) return;
-
-    const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.1), 4.5);
-
-    const rect = containerRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const newPanX = mouseX - (mouseX - pan.x) * (newZoom / zoom);
-    const newPanY = mouseY - (mouseY - pan.y) * (newZoom / zoom);
-
-    setZoom(newZoom);
-    setPan({ x: newPanX, y: newPanY });
   };
 
   // Mouse Down (Drag, Resize, Brush, Pan, Add)
@@ -446,6 +578,24 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     setIsResizingBubble(false);
     setIsBrushing(false);
     setResizeHandle(null);
+  };
+
+  // Double Click for Direct Inline Text Editing
+  const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const { x, y } = getCanvasCoords(e);
+    let clicked: Bubble | null = null;
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+        clicked = b;
+        break;
+      }
+    }
+    if (clicked) {
+      onSelectBubble(clicked.id);
+      setEditingBubbleId(clicked.id);
+      setInlineEditText(clicked.translatedText || clicked.originalText || '');
+    }
   };
 
   // Touch Gesture Handling
@@ -748,7 +898,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           {/* Zoom Controls Segment */}
           <div className="segmented-group">
             <button
-              onClick={() => setZoom((z) => Math.max(0.1, z * 0.85))}
+              onClick={() => handleZoomBy(0.85)}
               className="btn-icon"
               title="Thu nhỏ"
             >
@@ -762,7 +912,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               {Math.round(zoom * 100)}%
             </button>
             <button
-              onClick={() => setZoom((z) => Math.min(4.5, z * 1.15))}
+              onClick={() => handleZoomBy(1.15)}
               className="btn-icon"
               title="Phóng to"
             >
@@ -830,10 +980,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       {rawImageUrl ? (
         <div
           ref={containerRef}
-          onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onDoubleClick={handleDoubleClick}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
@@ -844,18 +994,74 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         >
           <div
             style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
               transformOrigin: '0 0',
               width: imgDimensions.width,
               height: imgDimensions.height,
+              willChange: 'transform',
             }}
-            className="relative shadow-2xl transition-transform duration-75 select-none"
+            className="relative shadow-2xl select-none"
           >
             <canvas
               ref={canvasRef}
               className="rounded shadow-2xl border border-slate-800 bg-slate-900 block"
             />
             <canvas ref={maskCanvasRef} className="hidden" />
+
+            {/* Floating Inline Text Editor on Double Click */}
+            {(() => {
+              const activeEditingBubble = bubbles.find((b) => b.id === editingBubbleId);
+              if (!activeEditingBubble) return null;
+
+              return (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: activeEditingBubble.x,
+                    top: activeEditingBubble.y,
+                    width: Math.max(160, activeEditingBubble.width),
+                    minHeight: Math.max(80, activeEditingBubble.height),
+                    zIndex: 100,
+                  }}
+                  className="bg-slate-900/95 border-2 border-indigo-500 rounded-xl p-2 shadow-2xl backdrop-blur-md flex flex-col gap-1.5"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-300 pb-1 border-b border-indigo-500/30 select-none">
+                    <span>✏️ Sửa Chữ Nhanh (Enter để lưu)</span>
+                    <button
+                      onClick={() => setEditingBubbleId(null)}
+                      className="text-slate-400 hover:text-white px-1 font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <textarea
+                    autoFocus
+                    rows={3}
+                    value={inlineEditText}
+                    onChange={(e) => {
+                      setInlineEditText(e.target.value);
+                      onUpdateBubble({
+                        ...activeEditingBubble,
+                        translatedText: e.target.value,
+                      });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        setEditingBubbleId(null);
+                      } else if (e.key === 'Escape') {
+                        setEditingBubbleId(null);
+                      }
+                    }}
+                    placeholder="Nhập nội dung thoại dịch..."
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-white text-xs font-sans focus:outline-none focus:border-indigo-400 resize-none"
+                  />
+                </div>
+              );
+            })()}
           </div>
         </div>
       ) : (

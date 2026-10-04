@@ -58,17 +58,6 @@ class ResilientLaMaInpainter:
         self.model = None
         self.is_ready = False
 
-        # Try SimpleLama library first if available
-        try:
-            from simple_lama_inpainting import SimpleLama
-            print("⏳ Initializing SimpleLama...")
-            self.model = SimpleLama(device=dev)
-            self.is_ready = True
-            print("✅ [Engine 1] SimpleLama loaded and ready!")
-            return
-        except Exception as se:
-            print(f"ℹ️ SimpleLama library fallback to direct TorchScript loading: {se}")
-
         model_path = os.path.join(os.path.dirname(__file__), "big-lama.pt") if "__file__" in globals() else "big-lama.pt"
         urls = [
             "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
@@ -80,7 +69,7 @@ class ResilientLaMaInpainter:
                 self.model = torch.jit.load(model_path, map_location=dev)
                 self.model.eval()
                 self.is_ready = True
-                print("✅ [Engine 1] TorchScript big-lama (FFC) loaded successfully!")
+                print(f"✅ [Engine 1] TorchScript big-lama (FFC) loaded successfully on {dev.upper()}!")
             except Exception as e:
                 print(f"⚠️ TorchScript load failed: {e}")
 
