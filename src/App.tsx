@@ -24,12 +24,7 @@ import {
   importImagesFromFolderOrFiles
 } from './services/api';
 import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL } from './services/storage';
-import { 
-  inpaintImageWithLaMa, 
-  ocrBubbles, 
-  translateBubbles,
-  detectAndTranslatePageAuto
-} from './services/colabClient';
+import { inpaintImageWithLaMa, translateBubbles } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
 
 export const App: React.FC = () => {
@@ -319,169 +314,7 @@ export const App: React.FC = () => {
     }
   };
 
-  // 1. Action: AI LaMa Manga inpainting ONLY (Xóa chữ tái tạo nền)
-  const handleRunAutoCleanOnly = async () => {
-    if (!selectedFilename || !currentImage) return;
-
-    setIsProcessing(true);
-    setProcessingStatus('🧼 Đang xóa chữ & tái tạo nền bằng LaMa...');
-    try {
-      let targetBubbles = bubbles;
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise((res) => {
-        img.onload = res;
-        img.src = currentImage.rawUrl;
-      });
-
-      // If no bubbles exist yet, auto detect them first
-      if (targetBubbles.length === 0) {
-        setProcessingStatus('🔍 Đang tự động tìm vị trí chữ trên trang...');
-        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
-        setBubbles(targetBubbles);
-      }
-
-      const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = img.width;
-      maskCanvas.height = img.height;
-      const mctx = maskCanvas.getContext('2d');
-      if (mctx) {
-        mctx.fillStyle = '#000000';
-        mctx.fillRect(0, 0, img.width, img.height);
-        mctx.fillStyle = '#ffffff';
-        targetBubbles.forEach((b) => {
-          mctx.beginPath();
-          mctx.roundRect(b.x, b.y, b.width, b.height, 8);
-          mctx.fill();
-        });
-      }
-
-      setProcessingStatus('🧼 Đang chạy mô hình LaMa tái tạo nét vẽ...');
-      const maskBase64 = maskCanvas.toDataURL('image/png');
-      const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
-      const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
-
-      if (cleaned && cleaned !== sourceImg) {
-        pushHistory(cleaned, targetBubbles);
-        setCleanedImageBase64(cleaned);
-        await saveProjectMetadata(selectedFilename, targetBubbles, cleaned);
-      }
-    } catch (e) {
-      console.error('Auto clean failed:', e);
-    } finally {
-      setIsProcessing(false);
-      setProcessingStatus('');
-    }
-  };
-
-  // 2. Action: Translate ONLY (Dịch văn bản bằng Gemini / Manga-OCR)
-  const handleRunTranslateOnly = async () => {
-    if (!selectedFilename || !currentImage) return;
-
-    setIsProcessing(true);
-    setProcessingStatus('🔍 Đang nhận diện & dịch câu thoại...');
-    try {
-      let targetBubbles = bubbles;
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise((res) => {
-        img.onload = res;
-        img.src = currentImage.rawUrl;
-      });
-
-      if (targetBubbles.length === 0) {
-        setProcessingStatus('🔍 Đang tự động quét ô thoại & dịch sang tiếng Việt...');
-        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
-      } else {
-        setProcessingStatus('🌐 Đang dịch nội dung sang tiếng Việt...');
-        const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, targetBubbles);
-        targetBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
-      }
-
-      pushHistory(cleanedImageBase64, targetBubbles);
-      setBubbles(targetBubbles);
-      await saveProjectMetadata(selectedFilename, targetBubbles, cleanedImageBase64 || undefined);
-    } catch (e) {
-      console.error('Translation failed:', e);
-    } finally {
-      setIsProcessing(false);
-      setProcessingStatus('');
-    }
-  };
-
-  // 3. Action: ⚡ TRUE 1-CLICK AUTO TRANSLATE (Auto Detect + LaMa Inpaint + Translate)
-  const handleRunAutoCleanAndTranslate = async () => {
-    if (!selectedFilename || !currentImage) return;
-
-    setIsProcessing(true);
-    try {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise((res) => {
-        img.onload = res;
-        img.src = currentImage.rawUrl;
-      });
-
-      let targetBubbles = bubbles;
-
-      // Step 1: Auto-detect bubbles if user hasn't drawn any
-      if (targetBubbles.length === 0) {
-        setProcessingStatus('🔍 [1/3] Đang tự động nhận diện các ô thoại trên trang...');
-        targetBubbles = await detectAndTranslatePageAuto(colabConfig, currentImage.rawUrl, img.width, img.height);
-        if (targetBubbles.length > 0) {
-          setBubbles(targetBubbles);
-        } else {
-          setIsProcessing(false);
-          setProcessingStatus('');
-          alert('💡 Chưa phát hiện được ô thoại tự động!\n👉 Bạn có thể dùng chuột kéo vẽ trực tiếp trên tranh để tạo ô thoại (hoặc kết nối Colab GPU / nhập Gemini API Key để AI đọc ảnh).');
-          return;
-        }
-      }
-
-      // Step 2: LaMa Inpainting
-      let cleaned = cleanedImageBase64;
-      if (targetBubbles.length > 0) {
-        setProcessingStatus('🧼 [2/3] Đang dùng LaMa xóa chữ & tái tạo nền tranh...');
-        const maskCanvas = document.createElement('canvas');
-        maskCanvas.width = img.width;
-        maskCanvas.height = img.height;
-        const mctx = maskCanvas.getContext('2d');
-        if (mctx) {
-          mctx.fillStyle = '#000000';
-          mctx.fillRect(0, 0, img.width, img.height);
-          mctx.fillStyle = '#ffffff';
-          targetBubbles.forEach((b) => {
-            mctx.beginPath();
-            mctx.roundRect(b.x, b.y, b.width, b.height, 8);
-            mctx.fill();
-          });
-        }
-
-        const maskBase64 = maskCanvas.toDataURL('image/png');
-        const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
-        cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
-        if (cleaned && cleaned !== sourceImg) {
-          setCleanedImageBase64(cleaned);
-        }
-      }
-
-      // Step 3: OCR & Translation refinement if needed
-      setProcessingStatus('✍️ [3/3] Đang hoàn thiện bản dịch tiếng Việt...');
-      const ocrResultBubbles = await ocrBubbles(colabConfig, currentImage.rawUrl, targetBubbles);
-      const translatedResultBubbles = await translateBubbles(colabConfig, ocrResultBubbles);
-
-      pushHistory(cleaned || null, translatedResultBubbles);
-      setBubbles(translatedResultBubbles);
-      await saveProjectMetadata(selectedFilename, translatedResultBubbles, cleaned || undefined);
-    } catch (e) {
-      console.error('Auto clean and translate failed:', e);
-    } finally {
-      setIsProcessing(false);
-      setProcessingStatus('');
-    }
-  };
-
-  // Manual brush inpaint with LaMa Manga
+  // Manual brush inpaint (if connected to an AI inpaint backend)
   const handleManualInpaintArea = async (maskBase64: string) => {
     if (!currentImage) return;
     setIsProcessing(true);
@@ -502,48 +335,14 @@ export const App: React.FC = () => {
     }
   };
 
-  // Batch process single page runner
+  // Batch process single page runner (Render & Export)
   const handleProcessSinglePageForBatch = async (filename: string): Promise<boolean> => {
     try {
       const page = images.find((img) => img.filename === filename);
       if (!page) return false;
       const metadata = await loadProjectMetadata(filename);
       const pageBubbles = metadata?.bubbles || [];
-      let cleaned = metadata?.cleanedImageBase64 || null;
-
-      if (pageBubbles.length > 0 && colabConfig.serverUrl) {
-        const maskCanvas = document.createElement('canvas');
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        await new Promise((res) => {
-          img.onload = res;
-          img.src = page.rawUrl;
-        });
-        maskCanvas.width = img.width;
-        maskCanvas.height = img.height;
-        const mctx = maskCanvas.getContext('2d');
-        if (mctx) {
-          mctx.fillStyle = '#000000';
-          mctx.fillRect(0, 0, img.width, img.height);
-          mctx.fillStyle = '#ffffff';
-          pageBubbles.forEach((b: Bubble) => {
-            mctx.beginPath();
-            mctx.roundRect(b.x, b.y, b.width, b.height, 8);
-            mctx.fill();
-          });
-        }
-        const maskBase64 = maskCanvas.toDataURL('image/png');
-        const inpaintRes = await inpaintImageWithLaMa(colabConfig.serverUrl, page.rawUrl, maskBase64);
-        if (inpaintRes && inpaintRes !== page.rawUrl) {
-          cleaned = inpaintRes;
-        }
-      }
-
-      let translatedResult = pageBubbles;
-      if (pageBubbles.length > 0) {
-        const ocrResult = await ocrBubbles(colabConfig, page.rawUrl, pageBubbles);
-        translatedResult = await translateBubbles(colabConfig, ocrResult);
-      }
+      const cleaned = metadata?.cleanedImageBase64 || null;
 
       // Render to final canvas
       const renderBase64 = await new Promise<string | null>((resolve) => {
@@ -557,7 +356,7 @@ export const App: React.FC = () => {
           const ctx = canvas.getContext('2d');
           if (!ctx) return resolve(null);
           ctx.drawImage(img, 0, 0);
-          translatedResult.forEach((b: Bubble) => {
+          pageBubbles.forEach((b: Bubble) => {
             renderBubbleOnCanvas(ctx, b);
           });
           resolve(canvas.toDataURL('image/png'));
@@ -568,7 +367,6 @@ export const App: React.FC = () => {
       if (renderBase64) {
         const targetFolder = outputConfig.customFolderName || 'MangaTranslator/Output';
         await saveOutputImage(filename, renderBase64, true, targetFolder);
-        await saveProjectMetadata(filename, translatedResult, cleaned || undefined);
         return true;
       }
       return false;
@@ -590,18 +388,12 @@ export const App: React.FC = () => {
         onOpenBatchModal={() => setIsBatchModalOpen(true)}
         onOpenOutputModal={() => setIsOutputModalOpen(true)}
         onExportCurrent={handleExportCurrent}
-        onRunAutoCleanOnly={handleRunAutoCleanOnly}
-        onRunTranslateOnly={handleRunTranslateOnly}
-        onRunAutoCleanAndTranslate={handleRunAutoCleanAndTranslate}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         isProcessing={isProcessing}
         processingStatus={processingStatus}
-        onEngineChange={(mode: EngineMode) =>
-          handleSaveColabConfig({ ...colabConfig, engineMode: mode })
-        }
       />
 
       {/* Main Studio Workspace */}
@@ -717,12 +509,12 @@ export const App: React.FC = () => {
         </button>
 
         <button
-          onClick={handleRunAutoCleanAndTranslate}
+          onClick={handleExportCurrent}
           disabled={!selectedFilename || isProcessing}
           className="mobile-nav-btn primary"
         >
-          <Sparkles className="w-4 h-4 text-yellow-300" />
-          <span>{isProcessing ? 'Đang dịch...' : 'Dịch AI'}</span>
+          <Download className="w-4 h-4 text-white" />
+          <span>{isProcessing ? 'Đang xuất...' : 'Xuất Ảnh'}</span>
         </button>
 
         <button

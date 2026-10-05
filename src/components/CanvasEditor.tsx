@@ -64,10 +64,23 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   // View & Transform States
   const [zoom, setZoom] = useState<number>(0.8);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const zoomRef = useRef<number>(zoom);
+  const panRef = useRef<{ x: number; y: number }>(pan);
+  zoomRef.current = zoom;
+  panRef.current = pan;
+
   const [isPanning, setIsPanning] = useState<boolean>(false);
   const [startPan, setStartPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState<boolean>(false);
   const [isDraggingFileOver, setIsDraggingFileOver] = useState<boolean>(false);
+
+  // Track already loaded images so they NEVER re-trigger auto-fit or reset zoom/pan
+  const lastLoadedRawUrlRef = useRef<string | null>(null);
+  const lastLoadedCleanedUrlRef = useRef<string | null>(null);
+
+  // Callback refs to avoid recreating effects on render
+  const scheduleRenderRef = useRef<() => void>(() => {});
+  const updateOffscreenBgRef = useRef<() => void>(() => {});
 
   // Tools & View Modes
   const [activeTool, setActiveTool] = useState<'select' | 'add_bubble' | 'brush'>('select');
@@ -194,19 +207,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.restore();
     }
 
+    const currentZ = zoomRef.current;
+
     // 4. Selection Outline & 8-point Resize Handles for Active Bubble
     if (selectedBubbleId && viewLayer !== 'original') {
       const selected = bubbles.find((b) => b.id === selectedBubbleId);
       if (selected) {
         ctx.save();
         ctx.strokeStyle = '#6366f1';
-        ctx.lineWidth = 2 / zoom;
-        ctx.setLineDash([6 / zoom, 4 / zoom]);
+        ctx.lineWidth = 2 / currentZ;
+        ctx.setLineDash([6 / currentZ, 4 / currentZ]);
         ctx.strokeRect(selected.x, selected.y, selected.width, selected.height);
         ctx.setLineDash([]);
 
         // 8 handles (corners + midpoints)
-        const handleRadius = Math.max(4, 6 / zoom);
+        const handleRadius = Math.max(4, 6 / currentZ);
         const handles = [
           { name: 'nw', x: selected.x, y: selected.y },
           { name: 'n',  x: selected.x + selected.width / 2, y: selected.y },
@@ -224,7 +239,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           ctx.fillStyle = '#ffffff';
           ctx.fill();
           ctx.strokeStyle = '#4f46e5';
-          ctx.lineWidth = 2 / zoom;
+          ctx.lineWidth = 2 / currentZ;
           ctx.stroke();
         });
 
@@ -237,8 +252,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.save();
       ctx.fillStyle = 'rgba(99, 102, 241, 0.22)';
       ctx.strokeStyle = '#6366f1';
-      ctx.lineWidth = 2 / zoom;
-      ctx.setLineDash([6 / zoom, 4 / zoom]);
+      ctx.lineWidth = 2 / currentZ;
+      ctx.setLineDash([6 / currentZ, 4 / currentZ]);
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {
         ctx.roundRect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height, 8);
@@ -249,7 +264,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.stroke();
       ctx.restore();
     }
-  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, zoom, isDrawingNewBubble, currentDrawBox]);
+  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox]);
 
   // RequestAnimationFrame Throttled Render Schedule
   const scheduleRender = useCallback(() => {
@@ -262,17 +277,27 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     });
   }, [renderCanvas]);
 
+  scheduleRenderRef.current = scheduleRender;
+  updateOffscreenBgRef.current = updateOffscreenBg;
+
   // 1. Load Raw Image whenever rawImageUrl changes
   useEffect(() => {
     if (!rawImageUrl) {
+      lastLoadedRawUrlRef.current = null;
       rawImgRef.current = null;
       if (offscreenBgCanvasRef.current) {
         const bgCtx = offscreenBgCanvasRef.current.getContext('2d');
         if (bgCtx) bgCtx.clearRect(0, 0, offscreenBgCanvasRef.current.width, offscreenBgCanvasRef.current.height);
       }
-      scheduleRender();
+      scheduleRenderRef.current();
       return;
     }
+
+    // NEVER reload or reset zoom/pan if the same rawImageUrl is already loaded
+    if (rawImageUrl === lastLoadedRawUrlRef.current && rawImgRef.current) {
+      return;
+    }
+    lastLoadedRawUrlRef.current = rawImageUrl;
 
     let isMounted = true;
     const img = new Image();
@@ -283,18 +308,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const dims = { width: img.naturalWidth || 800, height: img.naturalHeight || 1200 };
       setImgDimensions(dims);
 
-      // Auto-fit initial view centered in container
+      // Auto-fit initial view centered in container ONLY on initial load of a new image
       if (containerRef.current) {
         const cw = containerRef.current.clientWidth || 800;
         const ch = containerRef.current.clientHeight || 900;
         const scaleX = (cw - 60) / dims.width;
         const scaleY = (ch - 60) / dims.height;
         const fitZoom = Math.min(Math.max(Math.min(scaleX, scaleY), 0.15), 1.5);
-        setZoom(fitZoom);
-        setPan({
+        const initialPan = {
           x: Math.round((cw - dims.width * fitZoom) / 2),
           y: Math.round((ch - dims.height * fitZoom) / 2),
-        });
+        };
+        zoomRef.current = fitZoom;
+        panRef.current = initialPan;
+        setZoom(fitZoom);
+        setPan(initialPan);
       }
 
       if (maskCanvasRef.current) {
@@ -302,24 +330,30 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         maskCanvasRef.current.height = dims.height;
       }
 
-      updateOffscreenBg();
-      scheduleRender();
+      updateOffscreenBgRef.current();
+      scheduleRenderRef.current();
     };
     img.src = rawImageUrl;
 
     return () => {
       isMounted = false;
     };
-  }, [rawImageUrl, updateOffscreenBg, scheduleRender]);
+  }, [rawImageUrl]);
 
   // 2. Load Cleaned/Inpainted Image whenever cleanedImageBase64 changes
   useEffect(() => {
     if (!cleanedImageBase64) {
+      lastLoadedCleanedUrlRef.current = null;
       cleanedImgRef.current = null;
-      updateOffscreenBg();
-      scheduleRender();
+      updateOffscreenBgRef.current();
+      scheduleRenderRef.current();
       return;
     }
+
+    if (cleanedImageBase64 === lastLoadedCleanedUrlRef.current && cleanedImgRef.current) {
+      return;
+    }
+    lastLoadedCleanedUrlRef.current = cleanedImageBase64;
 
     let isMounted = true;
     const img = new Image();
@@ -327,15 +361,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     img.onload = () => {
       if (!isMounted) return;
       cleanedImgRef.current = img;
-      updateOffscreenBg();
-      scheduleRender();
+      updateOffscreenBgRef.current();
+      scheduleRenderRef.current();
     };
     img.src = cleanedImageBase64;
 
     return () => {
       isMounted = false;
     };
-  }, [cleanedImageBase64, updateOffscreenBg, scheduleRender]);
+  }, [cleanedImageBase64]);
 
   // 3. Update background buffer only when layer configuration changes
   useEffect(() => {
@@ -370,14 +404,18 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      setZoom((prevZoom) => {
-        const nextZoom = Math.min(Math.max(prevZoom * factor, 0.08), 5.0);
-        setPan((prevPan) => ({
-          x: mouseX - (mouseX - prevPan.x) * (nextZoom / prevZoom),
-          y: mouseY - (mouseY - prevPan.y) * (nextZoom / prevZoom),
-        }));
-        return nextZoom;
-      });
+      const currentZoom = zoomRef.current;
+      const currentPan = panRef.current;
+      const nextZoom = Math.min(Math.max(currentZoom * factor, 0.08), 5.0);
+      const nextPan = {
+        x: mouseX - (mouseX - currentPan.x) * (nextZoom / currentZoom),
+        y: mouseY - (mouseY - currentPan.y) * (nextZoom / currentZoom),
+      };
+
+      zoomRef.current = nextZoom;
+      panRef.current = nextPan;
+      setZoom(nextZoom);
+      setPan(nextPan);
     };
 
     container.addEventListener('wheel', onWheel, { passive: false });
@@ -415,22 +453,27 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     const centerX = cw / 2;
     const centerY = ch / 2;
 
-    setZoom((prevZoom) => {
-      const nextZoom = Math.min(Math.max(prevZoom * factor, 0.08), 5.0);
-      setPan((prevPan) => ({
-        x: centerX - (centerX - prevPan.x) * (nextZoom / prevZoom),
-        y: centerY - (centerY - prevPan.y) * (nextZoom / prevZoom),
-      }));
-      return nextZoom;
-    });
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const nextZoom = Math.min(Math.max(currentZoom * factor, 0.08), 5.0);
+    const nextPan = {
+      x: centerX - (centerX - currentPan.x) * (nextZoom / currentZoom),
+      y: centerY - (centerY - currentPan.y) * (nextZoom / currentZoom),
+    };
+
+    zoomRef.current = nextZoom;
+    panRef.current = nextPan;
+    setZoom(nextZoom);
+    setPan(nextPan);
   };
 
   // Screen to Canvas Coordinates
-  const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement>) => {
+  const getCanvasCoords = (e: React.MouseEvent<HTMLDivElement> | MouseEvent) => {
     if (!canvasRef.current || !containerRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
+    const currentZ = zoomRef.current;
+    const x = (e.clientX - rect.left) / currentZ;
+    const y = (e.clientY - rect.top) / currentZ;
     return { x: Math.round(x), y: Math.round(y) };
   };
 
@@ -439,7 +482,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (e.button === 1 || e.button === 2 || spacePressed) {
       e.preventDefault();
       setIsPanning(true);
-      setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+      setStartPan({ x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y });
       return;
     }
 
@@ -464,7 +507,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (activeTool === 'select' && selectedBubbleId) {
       const selected = bubbles.find((b) => b.id === selectedBubbleId);
       if (selected) {
-        const threshold = 14 / zoom;
+        const threshold = 14 / zoomRef.current;
         const handles: { [key: string]: { x: number; y: number } } = {
           nw: { x: selected.x, y: selected.y },
           ne: { x: selected.x + selected.width, y: selected.y },
@@ -512,7 +555,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       } else {
         onSelectBubble(null);
         setIsPanning(true);
-        setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+        setStartPan({ x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y });
       }
     }
   };
@@ -520,7 +563,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   // Mouse Move
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (isPanning) {
-      setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
+      const newPan = { x: e.clientX - startPan.x, y: e.clientY - startPan.y };
+      panRef.current = newPan;
+      setPan(newPan);
       return;
     }
 
@@ -600,7 +645,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       if (selectedBubbleId) {
         const selected = bubbles.find((b) => b.id === selectedBubbleId);
         if (selected) {
-          const threshold = 14 / zoom;
+          const threshold = 14 / zoomRef.current;
           const handles: { [key: string]: { x: number; y: number } } = {
             nw: { x: selected.x, y: selected.y },
             ne: { x: selected.x + selected.width, y: selected.y },
@@ -671,6 +716,119 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
   };
 
+  // Global window listeners for drag & pan gestures so mouse doesn't get lost outside canvas
+  useEffect(() => {
+    if (!isPanning && !isDraggingBubble && !isResizingBubble && !isBrushing && !isDrawingNewBubble) {
+      return;
+    }
+
+    const onWindowMouseMove = (e: MouseEvent) => {
+      if (isPanning) {
+        const newPan = { x: e.clientX - startPan.x, y: e.clientY - startPan.y };
+        panRef.current = newPan;
+        setPan(newPan);
+        return;
+      }
+
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const currentZ = zoomRef.current;
+      const x = Math.round((e.clientX - rect.left) / currentZ);
+      const y = Math.round((e.clientY - rect.top) / currentZ);
+
+      if (isDrawingNewBubble) {
+        const minX = Math.min(x, drawStartPos.x);
+        const minY = Math.min(y, drawStartPos.y);
+        const w = Math.abs(x - drawStartPos.x);
+        const h = Math.abs(y - drawStartPos.y);
+        setCurrentDrawBox({ x: minX, y: minY, width: w, height: h });
+        return;
+      }
+
+      if (isBrushing && activeTool === 'brush') {
+        paintMask(x, y);
+        return;
+      }
+
+      if (isDraggingBubble && selectedBubbleId && bubbleInitialPos) {
+        const dx = x - dragStart.x;
+        const dy = y - dragStart.y;
+        const selected = bubbles.find((b) => b.id === selectedBubbleId);
+        if (selected) {
+          onUpdateBubble({
+            ...selected,
+            x: Math.max(0, Math.round(bubbleInitialPos.x + dx)),
+            y: Math.max(0, Math.round(bubbleInitialPos.y + dy)),
+          });
+        }
+        return;
+      }
+
+      if (isResizingBubble && selectedBubbleId && bubbleInitialPos && resizeHandle) {
+        const dx = x - dragStart.x;
+        const dy = y - dragStart.y;
+        const selected = bubbles.find((b) => b.id === selectedBubbleId);
+        if (!selected) return;
+
+        let newX = bubbleInitialPos.x;
+        let newY = bubbleInitialPos.y;
+        let newW = bubbleInitialPos.w;
+        let newH = bubbleInitialPos.h;
+
+        if (resizeHandle.includes('e')) newW = Math.max(30, bubbleInitialPos.w + dx);
+        if (resizeHandle.includes('s')) newH = Math.max(20, bubbleInitialPos.h + dy);
+        if (resizeHandle.includes('w')) {
+          const potentialW = bubbleInitialPos.w - dx;
+          if (potentialW >= 30) {
+            newX = bubbleInitialPos.x + dx;
+            newW = potentialW;
+          }
+        }
+        if (resizeHandle.includes('n')) {
+          const potentialH = bubbleInitialPos.h - dy;
+          if (potentialH >= 20) {
+            newY = bubbleInitialPos.y + dy;
+            newH = potentialH;
+          }
+        }
+
+        onUpdateBubble({
+          ...selected,
+          x: Math.round(newX),
+          y: Math.round(newY),
+          width: Math.round(newW),
+          height: Math.round(newH),
+        });
+        return;
+      }
+    };
+
+    const onWindowMouseUp = () => {
+      handleMouseUp();
+    };
+
+    window.addEventListener('mousemove', onWindowMouseMove);
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onWindowMouseMove);
+      window.removeEventListener('mouseup', onWindowMouseUp);
+    };
+  }, [
+    isPanning,
+    startPan,
+    isDraggingBubble,
+    dragStart,
+    bubbleInitialPos,
+    selectedBubbleId,
+    bubbles,
+    isResizingBubble,
+    resizeHandle,
+    isBrushing,
+    activeTool,
+    isDrawingNewBubble,
+    drawStartPos,
+  ]);
+
   // Double Click for Direct Inline Text Editing
   const handleDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const { x, y } = getCanvasCoords(e);
@@ -706,8 +864,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const centerY = (t1.clientY + t2.clientY) / 2;
       touchStateRef.current = {
         initialDist: dist,
-        initialZoom: zoom,
-        initialPan: { ...pan },
+        initialZoom: zoomRef.current,
+        initialPan: { ...panRef.current },
         center: { x: centerX, y: centerY },
       };
       setIsPanning(false);
@@ -743,6 +901,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const newPanX = mouseX - (mouseX - touchStateRef.current.initialPan.x) * (newZoom / touchStateRef.current.initialZoom) + (centerX - touchStateRef.current.center.x);
       const newPanY = mouseY - (mouseY - touchStateRef.current.initialPan.y) * (newZoom / touchStateRef.current.initialZoom) + (centerY - touchStateRef.current.center.y);
 
+      zoomRef.current = newZoom;
+      panRef.current = { x: newPanX, y: newPanY };
       setZoom(newZoom);
       setPan({ x: newPanX, y: newPanY });
     } else if (e.touches.length === 1 && !touchStateRef.current) {
@@ -818,11 +978,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (!containerRef.current || !rawImgRef.current) return;
     const cw = containerRef.current.clientWidth;
     const ch = containerRef.current.clientHeight;
+    const newPan = {
+      x: Math.round((cw - imgDimensions.width * scale) / 2),
+      y: Math.round((ch - imgDimensions.height * scale) / 2),
+    };
+    zoomRef.current = scale;
+    panRef.current = newPan;
     setZoom(scale);
-    setPan({
-      x: (cw - imgDimensions.width * scale) / 2,
-      y: (ch - imgDimensions.height * scale) / 2,
-    });
+    setPan(newPan);
   };
 
   const handleFitScreen = () => {
@@ -830,11 +993,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     const cw = containerRef.current.clientWidth;
     const ch = containerRef.current.clientHeight;
     const scale = Math.min((cw - 40) / imgDimensions.width, (ch - 60) / imgDimensions.height, 1.2);
+    const newPan = {
+      x: Math.max(10, Math.round((cw - imgDimensions.width * scale) / 2)),
+      y: Math.max(20, Math.round((ch - imgDimensions.height * scale) / 2)),
+    };
+    zoomRef.current = scale;
+    panRef.current = newPan;
     setZoom(scale);
-    setPan({
-      x: Math.max(10, (cw - imgDimensions.width * scale) / 2),
-      y: Math.max(20, (ch - imgDimensions.height * scale) / 2),
-    });
+    setPan(newPan);
   };
 
   return (
@@ -916,10 +1082,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             <button
               onClick={() => setActiveTool('brush')}
               className={`segmented-btn ${activeTool === 'brush' ? 'active' : ''}`}
-              title="Cọ tô vùng cần LaMa xóa nền thủ công"
+              title="Cọ tô vùng cần xóa nền"
             >
               <Brush className="w-3.5 h-3.5 text-red-400" />
-              <span className="desktop-inline">Cọ LaMa</span>
+              <span className="desktop-inline">Cọ Xóa</span>
             </button>
           </div>
 
@@ -1061,7 +1227,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Chạy LaMa Xóa Vùng Này</span>
+            <span>Xóa Nền Vùng Này</span>
           </button>
         </div>
       )}

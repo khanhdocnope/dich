@@ -62,7 +62,7 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
 
       setLogs((prev) =>
         prev.map((log, idx) =>
-          idx === i ? { ...log, message: 'Đang xử lý LaMa inpainting & dịch...' } : log
+          idx === i ? { ...log, message: 'Đang kết xuất trang...' } : log
         )
       );
 
@@ -73,7 +73,7 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
           setLogs((prev) =>
             prev.map((log, idx) =>
               idx === i
-                ? { ...log, status: 'success', message: 'Hoàn thành và đã lưu vào test-case!' }
+                ? { ...log, status: 'success', message: 'Hoàn thành và đã lưu ảnh!' }
                 : log
             )
           );
