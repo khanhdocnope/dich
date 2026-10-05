@@ -11,6 +11,7 @@ Features:
 
 from __future__ import annotations
 
+import torch
 import os
 import sys
 import time
@@ -46,7 +47,6 @@ app.add_middleware(
 # -------------------------------------------------------------
 # Device & Model Paths
 # -------------------------------------------------------------
-import torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU (Fallback)"
 print(f"🚀 AI Server starting on device: {device.upper()} ({gpu_name})")
@@ -150,49 +150,25 @@ class LaMaEngine:
 class ComicTextDetectorEngine:
     def __init__(self, model_path: str = COMIC_ONNX_PATH):
         self.model_path = model_path
-        self.session = None
         self.net = None
-        self.input_name = None
         self.ready = False
 
         if os.path.exists(model_path):
-            # 1. Try ONNX Runtime first (High-speed, robust)
             try:
-                import onnxruntime as ort
-                available_providers = ort.get_available_providers()
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in available_providers else ['CPUExecutionProvider']
-                self.session = ort.InferenceSession(model_path, providers=providers)
-                self.input_name = self.session.get_inputs()[0].name
+                self.net = cv2.dnn.readNetFromONNX(model_path)
+                self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                 self.ready = True
-                print(f"✅ ComicTextDetector (ONNX Runtime) initialized: {providers}")
-            except Exception:
-                pass
-
-            # 2. Fallback to OpenCV DNN (Zero crash CPU fallback)
-            if not self.ready:
-                try:
-                    self.net = cv2.dnn.readNetFromONNX(model_path)
-                    if hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0:
-                        try:
-                            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-                            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-                        except Exception:
-                            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-                    else:
-                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-                    self.ready = True
-                    print(f"✅ ComicTextDetector (OpenCV DNN CPU) initialized successfully!")
-                except Exception as e:
-                    print(f"⚠️ ComicTextDetector init notice: {e}")
+                print("✅ ComicTextDetector (OpenCV Engine) initialized successfully!")
+            except Exception as e:
+                print(f"⚠️ ComicTextDetector init notice: {e}")
 
     def detect_mask(self, img_bgr: np.ndarray, input_size: int = 1024) -> Tuple[np.ndarray, List[Dict[str, int]]]:
         h, w = img_bgr.shape[:2]
         full_mask = np.zeros((h, w), dtype=np.uint8)
         boxes = []
 
-        if not self.ready or (self.session is None and self.net is None):
+        if not self.ready or self.net is None:
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
             _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
             return thresh, []
@@ -213,13 +189,9 @@ class ComicTextDetectorEngine:
                 swapRB=True,
                 crop=False
             )
+            self.net.setInput(blob)
             try:
-                if self.session is not None:
-                    outs = self.session.run(None, {self.input_name: blob})
-                else:
-                    self.net.setInput(blob)
-                    outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
-
+                outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
                 for out in outs:
                     if len(out.shape) == 4 and out.shape[1] == 1:
                         mask_out = out[0, 0]
