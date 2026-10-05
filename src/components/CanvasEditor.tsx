@@ -4,6 +4,8 @@ import {
   ZoomOut, 
   Maximize, 
   Brush, 
+  Eraser,
+  Wand2,
   MousePointer, 
   Plus, 
   Split, 
@@ -13,7 +15,8 @@ import {
   FileImage,
   Undo2,
   Redo2,
-  RotateCcw
+  RotateCcw,
+  Loader2
 } from 'lucide-react';
 import { Bubble } from '../types';
 import { renderBubbleOnCanvas, defaultTextStyle } from '../services/typesettingEngine';
@@ -28,6 +31,10 @@ interface CanvasEditorProps {
   onAddBubble: (bubble: Bubble) => void;
   onDeleteBubble: (id: string) => void;
   onManualInpaintArea?: (maskBase64: string) => void;
+  onAutoCleanPage?: () => void;
+  isCleaningPage?: boolean;
+  isColabConnected?: boolean;
+  onOpenColabModal?: () => void;
   onAddImages?: (files: FileList | File[]) => void;
   onUndo?: () => void;
   onRedo?: () => void;
@@ -46,6 +53,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   onAddBubble,
   onDeleteBubble,
   onManualInpaintArea,
+  onAutoCleanPage,
+  isCleaningPage = false,
+  isColabConnected = false,
+  onOpenColabModal,
   onAddImages,
   onUndo,
   onRedo,
@@ -89,6 +100,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Brush settings
   const [brushSize, setBrushSize] = useState<number>(35);
+  const [brushMode, setBrushMode] = useState<'brush' | 'eraser'>('brush');
   const [isBrushing, setIsBrushing] = useState<boolean>(false);
 
   // Bubble Manipulation & Inline Editing
@@ -920,17 +932,25 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     handleMouseUp();
   };
 
-  // Mask Painting logic
+  // Mask Painting logic (Interactive Ruby Red Overlay with Eraser Mode)
   const paintMask = (x: number, y: number) => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
     const mctx = maskCanvas.getContext('2d');
     if (!mctx) return;
 
-    mctx.fillStyle = '#ffffff';
-    mctx.beginPath();
-    mctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
-    mctx.fill();
+    if (brushMode === 'eraser') {
+      mctx.globalCompositeOperation = 'destination-out';
+      mctx.beginPath();
+      mctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
+      mctx.fill();
+    } else {
+      mctx.globalCompositeOperation = 'source-over';
+      mctx.fillStyle = '#ef4444';
+      mctx.beginPath();
+      mctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
+      mctx.fill();
+    }
     renderCanvas();
   };
 
@@ -939,14 +959,51 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     if (!maskCanvas) return;
     const mctx = maskCanvas.getContext('2d');
     if (!mctx) return;
-    mctx.fillStyle = '#000000';
-    mctx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
     renderCanvas();
   };
 
   const handleApplyMaskInpaint = () => {
     if (!maskCanvasRef.current || !onManualInpaintArea) return;
-    const maskBase64 = maskCanvasRef.current.toDataURL('image/png');
+    const { width, height } = imgDimensions;
+
+    // Convert transparent red mask into pure black & white binary mask for LaMa
+    const binaryCanvas = document.createElement('canvas');
+    binaryCanvas.width = width;
+    binaryCanvas.height = height;
+    const bctx = binaryCanvas.getContext('2d');
+    if (!bctx) return;
+
+    bctx.fillStyle = '#000000';
+    bctx.fillRect(0, 0, width, height);
+
+    bctx.drawImage(maskCanvasRef.current, 0, 0);
+    const imgData = bctx.getImageData(0, 0, width, height);
+    const d = imgData.data;
+    let hasMask = false;
+
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] > 20 || d[i] > 50) {
+        d[i] = 255;
+        d[i + 1] = 255;
+        d[i + 2] = 255;
+        d[i + 3] = 255;
+        hasMask = true;
+      } else {
+        d[i] = 0;
+        d[i + 1] = 0;
+        d[i + 2] = 0;
+        d[i + 3] = 255;
+      }
+    }
+
+    if (!hasMask) {
+      alert('Chưa có nét vẽ nào. Vui lòng dùng cọ tô vùng chữ hoặc SFX cần xóa.');
+      return;
+    }
+
+    bctx.putImageData(imgData, 0, 0);
+    const maskBase64 = binaryCanvas.toDataURL('image/png');
     onManualInpaintArea(maskBase64);
     handleClearMask();
   };
@@ -1122,6 +1179,48 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             </button>
           </div>
 
+          {/* Interactive Comparison Split Slider (When in Split View) */}
+          {viewLayer === 'split' && (
+            <div className="segmented-group items-center px-2 py-0.5 space-x-1.5 bg-purple-950/40 border-purple-500/30">
+              <span className="text-[10px] text-purple-300 font-medium">Gốc</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={splitPos}
+                onChange={(e) => setSplitPos(Number(e.target.value))}
+                className="w-20 accent-purple-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg"
+                title="Kéo trượt để so sánh ảnh gốc và ảnh đã xóa"
+              />
+              <span className="text-[10px] text-purple-300 font-medium">Đã Xóa</span>
+            </div>
+          )}
+
+          {/* AI Page Cleaner Button */}
+          {onAutoCleanPage && (
+            <div className="segmented-group">
+              <button
+                onClick={onAutoCleanPage}
+                disabled={isCleaningPage}
+                className="segmented-btn text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                title="Tự động quét ký tự và xóa chữ toàn bộ trang bằng LaMa FFC"
+              >
+                {isCleaningPage ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                    <span className="desktop-inline">Đang AI Xóa...</span>
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="desktop-inline">AI Xóa Trang</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
           {/* History Segment (Undo / Redo / Reset) */}
           <div className="segmented-group">
             <button
@@ -1189,9 +1288,28 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       {/* Dedicated Mask Brush Sub-Toolbar (When Brush is active) */}
       {rawImageUrl && activeTool === 'brush' && (
         <div className="canvas-brush-toolbar flex-wrap">
-          <span className="text-xs font-semibold text-red-300 flex items-center gap-1.5">
-            <Brush className="w-3.5 h-3.5 text-red-400" />
-            <span>Cỡ cọ:</span>
+          {/* Brush / Eraser Mode Toggle */}
+          <div className="segmented-group">
+            <button
+              onClick={() => setBrushMode('brush')}
+              className={`segmented-btn ${brushMode === 'brush' ? 'active' : ''}`}
+              title="Cọ tô vùng cần xóa"
+            >
+              <Brush className="w-3.5 h-3.5 text-red-400" />
+              <span>Cọ Tô</span>
+            </button>
+            <button
+              onClick={() => setBrushMode('eraser')}
+              className={`segmented-btn ${brushMode === 'eraser' ? 'active' : ''}`}
+              title="Tẩy bớt vùng chọn nhầm"
+            >
+              <Eraser className="w-3.5 h-3.5 text-amber-400" />
+              <span>Cục Tẩy</span>
+            </button>
+          </div>
+
+          <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+            <span>Cỡ:</span>
           </span>
           <input
             type="range"
@@ -1206,6 +1324,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           <button
             onClick={handleClearMask}
             className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-all"
+            title="Xóa toàn bộ vùng chọn đỏ đã vẽ"
           >
             Xóa nét vẽ
           </button>
@@ -1225,9 +1344,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             onClick={handleApplyMaskInpaint}
             className="btn-primary"
             style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
+            title="Gửi vùng chọn tới mô hình LaMa Inpainting để khôi phục nét vẽ"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Xóa Nền Vùng Này</span>
+            <span>Xóa Nền Vùng Này (LaMa)</span>
           </button>
         </div>
       )}

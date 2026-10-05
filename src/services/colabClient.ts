@@ -45,6 +45,96 @@ export const ensureBase64 = async (urlOrBase64: string): Promise<string> => {
 };
 
 /**
+ * Full page AI clean (ComicTextDetector + Dilation + LaMa FFC Inpainting)
+ */
+export interface CleanPageResult {
+  success: boolean;
+  cleanedImageBase64?: string;
+  maskBase64?: string;
+  stats?: { flat: number; lama: number; regions: number };
+  error?: string;
+}
+
+export const cleanPageWithAI = async (
+  serverUrl: string,
+  imageBase64: string,
+  options?: { dilationPx?: number; flatThreshold?: number }
+): Promise<CleanPageResult> => {
+  if (!serverUrl) return { success: false, error: 'Chưa kết nối Colab AI Server' };
+
+  try {
+    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const payloadImg = await ensureBase64(imageBase64);
+
+    const res = await fetch(`${cleanUrl}/api/clean_page`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: JSON.stringify({
+        imageBase64: payloadImg,
+        dilationPx: options?.dilationPx ?? 4,
+        flatThreshold: options?.flatThreshold ?? 3.5,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        cleanedImageBase64: data.cleanedImageBase64,
+        maskBase64: data.maskBase64,
+        stats: data.stats,
+      };
+    } else {
+      const err = await res.text();
+      return { success: false, error: err || 'Lỗi xử lý từ máy chủ AI' };
+    }
+  } catch (e: any) {
+    console.error('cleanPageWithAI failed:', e);
+    return { success: false, error: e?.message || 'Không thể kết nối tới server AI' };
+  }
+};
+
+/**
+ * Text detection connector using ComicTextDetector ONNX
+ */
+export const detectTextRegions = async (
+  serverUrl: string,
+  imageBase64: string
+): Promise<{ success: boolean; boxes: Array<{ x: number; y: number; width: number; height: number }>; maskBase64?: string }> => {
+  if (!serverUrl) return { success: false, boxes: [] };
+
+  try {
+    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const payloadImg = await ensureBase64(imageBase64);
+
+    const res = await fetch(`${cleanUrl}/api/detect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: JSON.stringify({ imageBase64: payloadImg }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        boxes: data.boxes || [],
+        maskBase64: data.maskBase64,
+      };
+    }
+  } catch (e) {
+    console.warn('Detect request failed:', e);
+  }
+
+  return { success: false, boxes: [] };
+};
+
+/**
  * Basic area inpainting connector (for future AI models)
  */
 export const inpaintImageWithLaMa = async (

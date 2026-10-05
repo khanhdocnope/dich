@@ -24,7 +24,7 @@ import {
   importImagesFromFolderOrFiles
 } from './services/api';
 import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL } from './services/storage';
-import { inpaintImageWithLaMa, translateBubbles } from './services/colabClient';
+import { inpaintImageWithLaMa, translateBubbles, cleanPageWithAI } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
 
 export const App: React.FC = () => {
@@ -39,6 +39,7 @@ export const App: React.FC = () => {
   // Status & Progress States
   const [isLoadingImages, setIsLoadingImages] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [isCleaningPage, setIsCleaningPage] = useState<boolean>(false);
   const [processingStatus, setProcessingStatus] = useState<string>('');
 
   // Mobile Drawer States
@@ -335,6 +336,44 @@ export const App: React.FC = () => {
     }
   };
 
+  // Full page AI clean (ComicTextDetector + Dilation + LaMa FFC Inpainting)
+  const handleAutoCleanPage = async () => {
+    if (!currentImage) return;
+    if (!colabConfig.serverUrl) {
+      alert('Vui lòng kết nối Colab GPU trước khi dùng tính năng AI Làm Sạch Trang.');
+      setIsColabModalOpen(true);
+      return;
+    }
+
+    setIsCleaningPage(true);
+    setProcessingStatus('Đang quét ký tự & khôi phục chi tiết bằng LaMa FFC...');
+    try {
+      const sourceImg = currentImage.rawUrl;
+      const res = await cleanPageWithAI(colabConfig.serverUrl, sourceImg, {
+        dilationPx: 4,
+        flatThreshold: 3.5,
+      });
+
+      if (res.success && res.cleanedImageBase64) {
+        pushHistory(res.cleanedImageBase64, bubbles);
+        setCleanedImageBase64(res.cleanedImageBase64);
+        if (selectedFilename) {
+          await saveProjectMetadata(selectedFilename, bubbles, res.cleanedImageBase64);
+        }
+        const flatCount = res.stats?.flat ?? 0;
+        const lamaCount = res.stats?.lama ?? 0;
+        alert(`🎉 Đã làm sạch trang thành công!\n• Thoại phẳng: ${flatCount} vùng\n• Chi tiết nét vẽ LaMa: ${lamaCount} vùng`);
+      } else {
+        alert(`⚠️ Xử lý thất bại: ${res.error || 'Vui lòng kiểm tra lại Colab Server.'}`);
+      }
+    } catch (e: any) {
+      alert(`❌ Lỗi kết nối AI: ${e?.message || e}`);
+    } finally {
+      setIsCleaningPage(false);
+      setProcessingStatus('');
+    }
+  };
+
   // Batch process single page runner (Render & Export)
   const handleProcessSinglePageForBatch = async (filename: string): Promise<boolean> => {
     try {
@@ -447,6 +486,10 @@ export const App: React.FC = () => {
             if (selectedBubbleId === id) setSelectedBubbleId(null);
           }}
           onManualInpaintArea={handleManualInpaintArea}
+          onAutoCleanPage={handleAutoCleanPage}
+          isCleaningPage={isCleaningPage}
+          isColabConnected={colabConfig.connected}
+          onOpenColabModal={() => setIsColabModalOpen(true)}
           onAddImages={handleAddImages}
           onUndo={handleUndo}
           onRedo={handleRedo}
