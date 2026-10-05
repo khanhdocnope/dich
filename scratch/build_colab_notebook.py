@@ -47,8 +47,8 @@ def build_notebook():
             "    except Exception as e:\n",
             "        print(f\"⚠️ Ghi chú Drive: {e}\")\n",
             "\n",
-            "print(\"⏳ Đang cài đặt các thư viện cần thiết (FastAPI, OpenCV Headless, Uvicorn, PyNgrok, PyClipper, Shapely)...\")\n",
-            "!pip install -q fastapi uvicorn pyngrok opencv-python-headless pyclipper shapely\n",
+            "print(\"⏳ Đang cài đặt các thư viện cần thiết (FastAPI, OpenCV, Uvicorn, PyNgrok, PyClipper, Shapely, ONNXRuntime)...\")\n",
+            "!pip install -q fastapi uvicorn pyngrok opencv-python-headless pyclipper shapely onnxruntime\n",
             "print(\"✅ Cài đặt thư viện hoàn tất!\")\n"
         ]
     }
@@ -169,29 +169,49 @@ class LaMaEngine:
 class ComicTextDetectorEngine:
     def __init__(self, model_path: str = COMIC_ONNX_PATH):
         self.model_path = model_path
+        self.session = None
         self.net = None
+        self.input_name = None
         self.ready = False
 
         if os.path.exists(model_path):
+            # 1. Try ONNX Runtime first (High-speed, robust)
             try:
-                self.net = cv2.dnn.readNetFromONNX(model_path)
-                if device == "cuda":
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
-                else:
-                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                import onnxruntime as ort
+                available_providers = ort.get_available_providers()
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if 'CUDAExecutionProvider' in available_providers else ['CPUExecutionProvider']
+                self.session = ort.InferenceSession(model_path, providers=providers)
+                self.input_name = self.session.get_inputs()[0].name
                 self.ready = True
-                print(f"✅ ComicTextDetector (ONNX) đã nạp thành công!")
-            except Exception as e:
-                print(f"⚠️ ComicTextDetector notice: {e}")
+                print(f"✅ ComicTextDetector (ONNX Runtime) đã nạp thành công: {providers}")
+            except Exception:
+                pass
+
+            # 2. Fallback to OpenCV DNN (Zero crash CPU fallback)
+            if not self.ready:
+                try:
+                    self.net = cv2.dnn.readNetFromONNX(model_path)
+                    if hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                        try:
+                            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                        except Exception:
+                            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                    else:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                    self.ready = True
+                    print(f"✅ ComicTextDetector (OpenCV DNN CPU) đã nạp thành công!")
+                except Exception as e:
+                    print(f"⚠️ ComicTextDetector init notice: {e}")
 
     def detect_mask(self, img_bgr: np.ndarray, input_size: int = 1024) -> Tuple[np.ndarray, List[Dict[str, int]]]:
         h, w = img_bgr.shape[:2]
         full_mask = np.zeros((h, w), dtype=np.uint8)
         boxes = []
 
-        if not self.ready or self.net is None:
+        if not self.ready or (self.session is None and self.net is None):
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
             _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
             return thresh, []
@@ -212,17 +232,26 @@ class ComicTextDetectorEngine:
                 swapRB=True,
                 crop=False
             )
-            self.net.setInput(blob)
             try:
-                outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+                if self.session is not None:
+                    outs = self.session.run(None, {self.input_name: blob})
+                else:
+                    self.net.setInput(blob)
+                    outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+
                 for out in outs:
-                    if len(out.shape) == 4 and out.shape[1] in [1, 2]:
+                    if len(out.shape) == 4 and out.shape[1] == 1:
                         mask_out = out[0, 0]
                         mask_res = cv2.resize(mask_out, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
                         binary = (mask_res > 0.3).astype(np.uint8) * 255
                         full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
+                    elif len(out.shape) == 4 and out.shape[1] == 2:
+                        prob = out[0, 0] if out[0, 0].max() > 0.5 else out[0, 1]
+                        mask_res = cv2.resize(prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
+                        binary = (mask_res > 0.3).astype(np.uint8) * 255
+                        full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
             except Exception as e:
-                print(f"Detection error at y={y}: {e}")
+                print(f"Detection chunk error at y={y}: {e}")
 
             if y2 == h:
                 break
