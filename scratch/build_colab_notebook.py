@@ -210,17 +210,27 @@ class ComicTextDetectorEngine:
             self.net.setInput(blob)
             try:
                 outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+                det_prob = None
+                seg_prob = None
                 for out in outs:
                     if len(out.shape) == 4 and out.shape[1] == 1:
-                        mask_out = out[0, 0]
-                        mask_res = cv2.resize(mask_out, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
-                        binary = (mask_res > 0.3).astype(np.uint8) * 255
-                        full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
+                        seg_prob = out[0, 0]
                     elif len(out.shape) == 4 and out.shape[1] == 2:
-                        prob = out[0, 0] if out[0, 0].max() > 0.5 else out[0, 1]
-                        mask_res = cv2.resize(prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
-                        binary = (mask_res > 0.3).astype(np.uint8) * 255
-                        full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
+                        det_prob = out[0, 0]  # Channel 0 is text probability (Channel 1 is DBNet threshold parameter)
+
+                if det_prob is not None and seg_prob is not None:
+                    comb_prob = np.maximum(det_prob, seg_prob)
+                elif det_prob is not None:
+                    comb_prob = det_prob
+                elif seg_prob is not None:
+                    comb_prob = seg_prob
+                else:
+                    comb_prob = np.zeros((input_size, input_size), dtype=np.float32)
+
+                mask_res = cv2.resize(comb_prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
+                # Sensitive threshold to capture colored, stylized, and pink text in manhwa/manga
+                binary = (mask_res > 0.20).astype(np.uint8) * 255
+                full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
             except Exception as e:
                 print(f"Detection chunk error at y={y}: {e}")
 
@@ -253,6 +263,7 @@ class MangaCleanerPipeline:
         w, h = img_rgb.size
         img_bgr = cv2.cvtColor(np.array(img_rgb), cv2.COLOR_RGB2BGR)
 
+        # 1. Determine Mask: Custom User Brush vs Auto Detector
         is_custom = False
         if custom_mask is not None:
             mask_arr = np.array(custom_mask.convert("L").resize((w, h), Image.Resampling.NEAREST))
@@ -264,52 +275,80 @@ class MangaCleanerPipeline:
         else:
             raw_mask, _ = self.detector.detect_mask(img_bgr)
 
+        # 2. Apply Morphological Dilation (anti-aliasing and stroke suppression)
         ksize = max(3, dilation_px * 2 + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
         dilated_mask = cv2.dilate(raw_mask, kernel)
 
+        # 3. If Custom Brush: Run LaMa Inpainting directly
         if is_custom:
             res_pil = self.lama(img_rgb, Image.fromarray(dilated_mask))
-            return res_pil, Image.fromarray(dilated_mask), {
-                "flat": 0, "lama": 1, "mode": "custom_brush", "total_regions": 1
-            }
+            stats = {"flat": 0, "lama": 1, "total_regions": 1, "mode": "custom_brush"}
+            return res_pil, Image.fromarray(dilated_mask), stats
 
+        # 4. Auto Clean: Partition into Regions with Generous Context Windows
         joined = cv2.dilate(dilated_mask, np.ones((merge_margin, merge_margin), np.uint8))
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
-        res_bgr = img_bgr.copy()
-        stats_cnt = {"flat": 0, "lama": 0, "total_regions": max(0, num_labels - 1), "mode": "auto"}
+
+        stats_counter = {"flat": 0, "lama": 0, "total_regions": max(0, num_labels - 1), "mode": "auto"}
+        result_bgr = img_bgr.copy()
 
         for i in range(1, num_labels):
             rx, ry, rw, rh, area = stats[i]
-            if area < 20: continue
+            if area < 15:
+                continue
 
-            ctx = 20
-            x1, y1 = max(0, rx - ctx), max(0, ry - ctx)
-            x2, y2 = min(w, rx + rw + ctx), min(h, ry + rh + ctx)
+            # Generous Context Window (at least 64px margin, minimum 256x256 patch for LaMa)
+            target_w = max(256, rw + 128)
+            target_h = max(256, rh + 128)
+            cx = rx + rw // 2
+            cy = ry + rh // 2
+            x1 = max(0, cx - target_w // 2)
+            y1 = max(0, cy - target_h // 2)
+            x2 = min(w, x1 + target_w)
+            y2 = min(h, y1 + target_h)
+            x1 = max(0, x2 - target_w)
+            y1 = max(0, y2 - target_h)
 
-            crop_img = res_bgr[y1:y2, x1:x2]
-            crop_m = dilated_mask[y1:y2, x1:x2]
-            if not crop_m.any(): continue
+            crop_img = result_bgr[y1:y2, x1:x2]
+            crop_mask = dilated_mask[y1:y2, x1:x2]
 
-            ring = cv2.dilate(crop_m, np.ones((11, 11), np.uint8)) & cv2.bitwise_not(crop_m)
-            ring_pix = crop_img[ring > 0]
+            if not crop_mask.any():
+                continue
 
-            if len(ring_pix) > 30 and ring_pix.std(axis=0).max() < flat_threshold:
-                crop_img[crop_m > 0] = np.median(ring_pix, axis=0).astype(np.uint8)
-                stats_cnt["flat"] += 1
+            # Check if region is a STRICTLY pure-white flat speech bubble
+            ring_inner = cv2.dilate(crop_mask, np.ones((9, 9), np.uint8))
+            ring_outer = cv2.dilate(crop_mask, np.ones((27, 27), np.uint8))
+            ring = ring_outer & cv2.bitwise_not(ring_inner)
+            ring_pixels = crop_img[ring > 0]
+
+            is_pure_white_flat = False
+            if len(ring_pixels) > 50:
+                # Must be strictly uniform and bright white (>245)
+                if ring_pixels.std(axis=0).max() < 1.8 and ring_pixels.mean() > 245:
+                    is_pure_white_flat = True
+
+            if is_pure_white_flat:
+                # Pure white flat bubble -> crisp median fill
+                median_col = np.median(ring_pixels, axis=0).astype(np.uint8)
+                crop_img[crop_mask > 0] = median_col
+                stats_counter["flat"] += 1
             else:
-                c_pil = Image.fromarray(cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB))
-                m_pil = Image.fromarray(crop_m)
-                inpaint_res = self.lama(c_pil, m_pil)
-                inpaint_bgr = cv2.cvtColor(np.array(inpaint_res), cv2.COLOR_RGB2BGR)
-                crop_img[crop_m > 0] = inpaint_bgr[crop_m > 0]
-                stats_cnt["lama"] += 1
+                # All gradient bubbles, grey thought bubbles, screentones, and scenery:
+                # Inpaint with GPU LaMa with ample context!
+                crop_pil = Image.fromarray(cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB))
+                mask_pil = Image.fromarray(crop_mask)
+                res_pil = self.lama(crop_pil, mask_pil)
+                res_bgr = cv2.cvtColor(np.array(res_pil), cv2.COLOR_RGB2BGR)
 
-            res_bgr[y1:y2, x1:x2] = crop_img
+                crop_img[crop_mask > 0] = res_bgr[crop_mask > 0]
+                stats_counter["lama"] += 1
 
-        out_pil = Image.fromarray(cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB))
+            result_bgr[y1:y2, x1:x2] = crop_img
+
+        out_pil = Image.fromarray(cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB))
         mask_pil = Image.fromarray(dilated_mask)
-        return out_pil, mask_pil, stats_cnt
+        return out_pil, mask_pil, stats_counter
 
 cleaner_pipeline = MangaCleanerPipeline()
 print("🎉 Tất cả mô hình AI (LaMa FFC & ComicTextDetector) đã sẵn sàng!")
