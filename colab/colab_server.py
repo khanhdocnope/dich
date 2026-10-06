@@ -1,12 +1,16 @@
 """
 Manga Translator Studio - Core AI Inpainting & Cleaner Engine
+Powered by IOPaint (formerly Lama Cleaner by Sanster) & ComicTextDetector
 Features:
-  - 4-Stage Pipeline: ComicTextDetector + Dilation + LaMa FFC Inpainting + 1:1 Composite
+  - IOPaint Core Architecture: Symmetric Modulo-8 Padding + 1:1 Pixel-Perfect Composite
+  - Models: IOPaint Anime-Manga Big-LaMa & IOPaint Standard Big-LaMa
+  - High-Resolution Strategies: Full-Page Coherent (Manga) & Smart Context Cropping (Webtoon)
+  - 4-Stage Pipeline: ComicTextDetector + Dilation + IOPaint Inpainting + Alpha Composite
   - Built-in High-Performance HTML5 Web UI (Zero Gradio/HuggingFace dependencies, zero conflicts)
   - Interactive Canvas: Custom mask brush / eraser or 1-Click Auto Clean if left empty
   - Before / After interactive comparison slider
   - Google Drive & Local Directory Batch Processing with real-time progress & gallery
-  - Full REST API for Studio Web App & APK (/api/clean_page, /api/inpaint, /api/detect, /health)
+  - Full REST API for Studio Web App & APK (/api/clean_page, /api/inpaint, /api/detect, /health, /api/switch_model)
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import argparse
 import base64
 import threading
 import subprocess
+from enum import Enum
 from typing import List, Optional, Dict, Any, Tuple
 
 import cv2
@@ -34,7 +39,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Initialize FastAPI App
-app = FastAPI(title="Manga Translator Studio - LaMa & ComicTextCleaner Engine", version="5.2.0")
+app = FastAPI(title="Manga Translator Studio - IOPaint Engine", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,7 +61,8 @@ MODEL_DIR = os.path.join(HERE, "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 COMIC_ONNX_PATH = os.path.join(MODEL_DIR, "comictextdetector.pt.onnx")
-LAMA_PT_PATH = os.path.join(MODEL_DIR, "big-lama.pt")
+ANIME_LAMA_PT_PATH = os.path.join(MODEL_DIR, "anime-manga-big-lama.pt")
+BIG_LAMA_PT_PATH = os.path.join(MODEL_DIR, "big-lama.pt")
 
 def download_resilient(urls: List[str], dest: str, min_mb: int = 10) -> bool:
     if os.path.exists(dest) and os.path.getsize(dest) >= min_mb * 1024 * 1024:
@@ -75,7 +81,7 @@ def download_resilient(urls: List[str], dest: str, min_mb: int = 10) -> bool:
                 except: pass
     return False
 
-# Download models using direct HTTPS mirrors (Zero huggingface_hub python package dependency)
+# Download ComicTextDetector ONNX
 comic_urls = [
     "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx",
     "https://huggingface.co/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx",
@@ -83,69 +89,278 @@ comic_urls = [
 ]
 download_resilient(comic_urls, COMIC_ONNX_PATH, 10)
 
-lama_urls = [
-    "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
-    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/big-lama.pt",
-    "https://huggingface.co/kzome/manga-cleaner/resolve/main/data/big-lama.pt"
+# Download Official IOPaint Models (Sanster)
+anime_lama_urls = [
+    "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt",
+    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/anime-manga-big-lama.pt"
 ]
-download_resilient(lama_urls, LAMA_PT_PATH, 50)
+download_resilient(anime_lama_urls, ANIME_LAMA_PT_PATH, 50)
+
+big_lama_urls = [
+    "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+    "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
+    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/big-lama.pt"
+]
+download_resilient(big_lama_urls, BIG_LAMA_PT_PATH, 50)
 
 # -------------------------------------------------------------
-# Stage 3: LaMa Inpainting Engine (FFC TorchScript)
+# IOPaint (formerly Lama Cleaner) Core Engine Helpers
+# Official Sanster Preprocessing & Padding Pipeline
 # -------------------------------------------------------------
-class LaMaEngine:
-    def __init__(self, model_path: str = LAMA_PT_PATH, dev: str = device):
+def ceil_modulo(x: int, mod: int) -> int:
+    if x % mod == 0:
+        return x
+    return (x // mod + 1) * mod
+
+def pad_img_to_modulo(img: np.ndarray, mod: int = 8, min_size: Optional[int] = None) -> np.ndarray:
+    """
+    IOPaint symmetric modulo padding.
+    Symmetrically reflects boundary pixels so that dimensions are divisible by mod (8),
+    avoiding black border padding artifacts and bilinear downscaling degradation.
+    """
+    if len(img.shape) == 2:
+        img = img[:, :, np.newaxis]
+    height, width = img.shape[:2]
+    out_height = ceil_modulo(height, mod)
+    out_width = ceil_modulo(width, mod)
+
+    if min_size is not None:
+        out_width = max(min_size, out_width)
+        out_height = max(min_size, out_height)
+
+    return np.pad(
+        img,
+        ((0, out_height - height), (0, out_width - width), (0, 0)),
+        mode="symmetric"
+    )
+
+def norm_img(np_img: np.ndarray) -> np.ndarray:
+    """IOPaint image normalization to (C, H, W) float32 in [0, 1]."""
+    if len(np_img.shape) == 2:
+        np_img = np_img[:, :, np.newaxis]
+    np_img = np.transpose(np_img, (2, 0, 1))
+    return np_img.astype("float32") / 255.0
+
+def boxes_from_mask(mask: np.ndarray) -> List[np.ndarray]:
+    """Extracts bounding boxes [x1, y1, x2, y2] from a binary mask (IOPaint standard)."""
+    height, width = mask.shape[:2]
+    _, thresh = cv2.threshold(mask, 127, 255, 0)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    boxes = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w > 4 and h > 4:
+            box = np.array([x, y, x + w, y + h]).astype(int)
+            box[::2] = np.clip(box[::2], 0, width)
+            box[1::2] = np.clip(box[1::2], 0, height)
+            boxes.append(box)
+    return boxes
+
+class HDStrategy(str, Enum):
+    ORIGINAL = "ORIGINAL"
+    CROP = "CROP"
+    RESIZE = "RESIZE"
+
+# -------------------------------------------------------------
+# IOPaint Inpainting Engine (Sanster Architecture)
+# -------------------------------------------------------------
+class IOPaintEngine:
+    def __init__(self, default_model: str = "anime-lama", dev: str = device):
         self.dev = dev
+        self.pad_mod = 8
+        self.current_model_name = default_model
         self.model = None
         self.ready = False
-        if os.path.exists(model_path) and os.path.getsize(model_path) > 10000000:
+        self.loaded_models: Dict[str, Any] = {}
+        self.load_model(default_model)
+
+    def load_model(self, model_name: str) -> bool:
+        """Loads or switches active IOPaint model (anime-lama or lama)."""
+        model_name = model_name.lower().strip()
+        if model_name in self.loaded_models:
+            self.model = self.loaded_models[model_name]
+            self.current_model_name = model_name
+            self.ready = True
+            print(f"🔄 Switched active IOPaint model to: {model_name}")
+            return True
+
+        target_path = None
+        if "anime" in model_name:
+            target_path = ANIME_LAMA_PT_PATH
+            canonical_name = "anime-lama"
+        else:
+            target_path = BIG_LAMA_PT_PATH
+            canonical_name = "lama"
+
+        # Fallback check
+        if not os.path.exists(target_path) or os.path.getsize(target_path) < 10000000:
+            if target_path == ANIME_LAMA_PT_PATH and os.path.exists(BIG_LAMA_PT_PATH):
+                target_path = BIG_LAMA_PT_PATH
+                canonical_name = "lama"
+            elif target_path == BIG_LAMA_PT_PATH and os.path.exists(ANIME_LAMA_PT_PATH):
+                target_path = ANIME_LAMA_PT_PATH
+                canonical_name = "anime-lama"
+
+        if os.path.exists(target_path) and os.path.getsize(target_path) > 10000000:
             try:
-                self.model = torch.jit.load(model_path, map_location=dev)
-                self.model.eval()
+                print(f"⏳ Loading IOPaint model: {canonical_name} ({os.path.basename(target_path)})...")
+                loaded = torch.jit.load(target_path, map_location=self.dev)
+                loaded.eval()
+                self.loaded_models[canonical_name] = loaded
+                self.model = loaded
+                self.current_model_name = canonical_name
                 self.ready = True
-                print(f"✅ LaMa FFC Inpainter loaded successfully on {dev.upper()}!")
+                print(f"✅ IOPaint Model '{canonical_name}' loaded successfully on {self.dev.upper()}!")
+                return True
             except Exception as e:
-                print(f"⚠️ Failed to load TorchScript LaMa: {e}")
+                print(f"⚠️ Failed to load IOPaint model {target_path}: {e}")
+                self.ready = False
+                return False
+        return False
 
-    def __call__(self, img: Image.Image, mask: Image.Image) -> Image.Image:
-        orig_w, orig_h = img.size
-        mask_l = mask.convert("L")
+    def forward(self, pad_image_rgb: np.ndarray, pad_mask: np.ndarray) -> np.ndarray:
+        """
+        IOPaint forward pass.
+        pad_image_rgb: [H, W, 3] RGB uint8 (modulo-8 padded)
+        pad_mask: [H, W, 1] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        img_norm = norm_img(pad_image_rgb)
+        mask_norm = norm_img(pad_mask)
+        mask_norm = (mask_norm > 0) * 1.0
 
-        if self.ready and self.model is not None:
-            try:
-                mod_w = max(8, ((orig_w + 7) // 8) * 8)
-                mod_h = max(8, ((orig_h + 7) // 8) * 8)
+        img_t = torch.from_numpy(img_norm).unsqueeze(0).to(self.dev)
+        mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(self.dev)
 
-                img_resized = img.resize((mod_w, mod_h), Image.Resampling.BILINEAR)
-                mask_resized = mask_l.resize((mod_w, mod_h), Image.Resampling.NEAREST)
+        with torch.inference_mode():
+            out = self.model(img_t, mask_t)
 
-                img_t = torch.from_numpy(np.array(img_resized).astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(self.dev)
-                mask_t = torch.from_numpy((np.array(mask_resized).astype(np.float32) / 255.0 > 0.2).astype(np.float32)).unsqueeze(0).unsqueeze(0).to(self.dev)
+        cur_res = out[0].permute(1, 2, 0).detach().cpu().numpy()
+        cur_res = np.clip(cur_res * 255.0, 0, 255).astype(np.uint8)
+        cur_res = cv2.cvtColor(cur_res, cv2.COLOR_RGB2BGR)
+        return cur_res
 
-                with torch.inference_mode():
-                    out = self.model(img_t, mask_t)
+    def _pad_forward(self, image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """
+        Runs IOPaint forward pass with symmetric padding and 1:1 pixel-perfect compositing.
+        image_rgb: [H, W, 3] RGB uint8
+        mask: [H, W] or [H, W, 1] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        if len(mask.shape) == 2:
+            mask = mask[:, :, np.newaxis]
+        orig_h, orig_w = image_rgb.shape[:2]
 
-                out_np = (out[0].permute(1, 2, 0).detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
-                res_img = Image.fromarray(out_np).resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+        pad_image = pad_img_to_modulo(image_rgb, mod=self.pad_mod)
+        pad_mask = pad_img_to_modulo(mask, mod=self.pad_mod)
 
-                # Stage 4: 1:1 Pixel-Perfect Alpha Composite
-                res_arr = np.array(res_img).astype(np.float32)
-                orig_arr = np.array(img).astype(np.float32)
-                mask_arr = np.expand_dims(np.array(mask_l).astype(np.float32) / 255.0, axis=2)
+        result_bgr = self.forward(pad_image, pad_mask)
+        result_bgr = result_bgr[0:orig_h, 0:orig_w, :]
 
-                final_arr = (res_arr * mask_arr + orig_arr * (1.0 - mask_arr)).clip(0, 255).astype(np.uint8)
-                return Image.fromarray(final_arr)
-            except Exception as e:
-                print(f"⚠️ LaMa inference warning: {e}. Falling back to OpenCV Telea...")
+        # 1:1 Pixel-Perfect Mask Composite (Preserves untouched original pixels perfectly)
+        mask_norm = (mask.astype(np.float32) / 255.0)
+        orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR).astype(np.float32)
+        res_bgr = result_bgr.astype(np.float32)
+        final_bgr = (res_bgr * mask_norm + orig_bgr * (1.0 - mask_norm)).clip(0, 255).astype(np.uint8)
+        return final_bgr
 
-        # Fallback Engine (Zero Crash)
-        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        mask_cv = np.array(mask_l)
-        inpainted = cv2.inpaint(img_cv, mask_cv, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
-        return Image.fromarray(cv2.cvtColor(inpainted, cv2.COLOR_BGR2RGB))
+    def _crop_box(self, image: np.ndarray, mask: np.ndarray, box: np.ndarray, margin: int = 128) -> Tuple[np.ndarray, np.ndarray, List[int]]:
+        """IOPaint bounding box crop with generous context expansion."""
+        box_h = box[3] - box[1]
+        box_w = box[2] - box[0]
+        cx = (box[0] + box[2]) // 2
+        cy = (box[1] + box[3]) // 2
+        img_h, img_w = image.shape[:2]
+
+        w = box_w + margin * 2
+        h = box_h + margin * 2
+
+        _l = cx - w // 2
+        _r = cx + w // 2
+        _t = cy - h // 2
+        _b = cy + h // 2
+
+        l = max(_l, 0)
+        r = min(_r, img_w)
+        t = max(_t, 0)
+        b = min(_b, img_h)
+
+        if _l < 0: r = min(img_w, r + abs(_l))
+        if _r > img_w: l = max(0, l - (_r - img_w))
+        if _t < 0: b = min(img_h, b + abs(_t))
+        if _b > img_h: t = max(0, t - (_b - img_h))
+
+        crop_img = image[t:b, l:r, :]
+        crop_mask = mask[t:b, l:r]
+        return crop_img, crop_mask, [l, t, r, b]
+
+    def inpaint(
+        self,
+        image_rgb: np.ndarray,
+        mask: np.ndarray,
+        hd_strategy: HDStrategy = HDStrategy.ORIGINAL,
+        crop_trigger_size: int = 2500,
+        crop_margin: int = 128
+    ) -> np.ndarray:
+        """
+        IOPaint Main Inpainting Routine.
+        - For regular Manga pages (<= 2500px): Uses full-image coherent pass for flawless global context.
+        - For gigantic Webtoons (> 2500px): Uses IOPaint CROP strategy with ample context windows.
+        image_rgb: [H, W, 3] uint8
+        mask: [H, W] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        if not self.ready or self.model is None:
+            # Fallback
+            orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+            return cv2.inpaint(orig_bgr, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+        h, w = image_rgb.shape[:2]
+        max_dim = max(h, w)
+
+        # Webtoon safety: if image is extremely large (> 2500px), use IOPaint CROP strategy to avoid GPU OOM
+        use_crop = (hd_strategy == HDStrategy.CROP) or (max_dim > crop_trigger_size)
+
+        if use_crop:
+            boxes = boxes_from_mask(mask)
+            if not boxes:
+                return cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+
+            inpaint_res_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR).copy()
+            for box in boxes:
+                crop_img, crop_mask, [l, t, r, b] = self._crop_box(image_rgb, mask, box, margin=crop_margin)
+                if not crop_mask.any():
+                    continue
+                crop_res_bgr = self._pad_forward(crop_img, crop_mask)
+                inpaint_res_bgr[t:b, l:r, :] = crop_res_bgr
+            return inpaint_res_bgr
+
+        elif hd_strategy == HDStrategy.RESIZE and max_dim > 2048:
+            ratio = 2048.0 / max_dim
+            new_w, new_h = int(w * ratio + 0.5), int(h * ratio + 0.5)
+            down_img = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+            down_mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            down_res_bgr = self._pad_forward(down_img, down_mask)
+            up_res_bgr = cv2.resize(down_res_bgr, (w, h), interpolation=cv2.INTER_CUBIC)
+
+            mask_norm = np.expand_dims(mask.astype(np.float32) / 255.0, axis=2)
+            orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR).astype(np.float32)
+            final_bgr = (up_res_bgr.astype(np.float32) * mask_norm + orig_bgr * (1.0 - mask_norm)).clip(0, 255).astype(np.uint8)
+            return final_bgr
+        else:
+            # Full-Page Coherent Pass: Highest quality for Manga (LaMa FFC sees entire page structure & tones)
+            return self._pad_forward(image_rgb, mask)
+
+    def __call__(self, img_pil: Image.Image, mask_pil: Image.Image) -> Image.Image:
+        """PIL Helper wrapper for IOPaint."""
+        img_rgb = np.array(img_pil.convert("RGB"))
+        mask_l = np.array(mask_pil.convert("L"))
+        res_bgr = self.inpaint(img_rgb, mask_l)
+        return Image.fromarray(cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB))
 
 # -------------------------------------------------------------
-# Stage 1 & 2: ComicTextDetector & Dilation Engine
+# ComicTextDetector Engine (OpenCV ONNX Engine)
 # -------------------------------------------------------------
 class ComicTextDetectorEngine:
     def __init__(self, model_path: str = COMIC_ONNX_PATH):
@@ -223,118 +438,68 @@ class ComicTextDetectorEngine:
         contours, _ = cv2.findContours(full_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             bx, by, bw, bh = cv2.boundingRect(cnt)
-            if bw > 10 and bh > 10:
+            if bw > 8 and bh > 8:
                 boxes.append({"x": int(bx), "y": int(by), "width": int(bw), "height": int(bh)})
 
         return full_mask, boxes
 
 # -------------------------------------------------------------
-# Global Cleaner Pipeline
+# Manga Cleaner Pipeline
 # -------------------------------------------------------------
 class MangaCleanerPipeline:
     def __init__(self):
-        self.lama = LaMaEngine()
+        self.iopaint = IOPaintEngine(default_model="anime-lama")
         self.detector = ComicTextDetectorEngine()
 
     def clean_image(
         self,
         img_pil: Image.Image,
         dilation_px: int = 4,
-        flat_threshold: float = 3.5,
-        merge_margin: int = 30,
-        custom_mask: Optional[Image.Image] = None
+        custom_mask: Optional[Image.Image] = None,
+        model_name: Optional[str] = None
     ) -> Tuple[Image.Image, Image.Image, Dict[str, Any]]:
+        if model_name:
+            self.iopaint.load_model(model_name)
+
         img_rgb = img_pil.convert("RGB")
         w, h = img_rgb.size
-        img_bgr = cv2.cvtColor(np.array(img_rgb), cv2.COLOR_RGB2BGR)
+        img_rgb_arr = np.array(img_rgb)
+        img_bgr_arr = cv2.cvtColor(img_rgb_arr, cv2.COLOR_RGB2BGR)
 
-        # 1. Determine Mask: Custom User Brush vs Auto Detector
+        # 1. Determine Mask: Custom User Brush vs Auto ComicTextDetector
         is_custom = False
+        boxes_count = 0
         if custom_mask is not None:
             mask_arr = np.array(custom_mask.convert("L").resize((w, h), Image.Resampling.NEAREST))
             if mask_arr.max() > 20:
                 raw_mask = (mask_arr > 20).astype(np.uint8) * 255
                 is_custom = True
             else:
-                raw_mask, _ = self.detector.detect_mask(img_bgr)
+                raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+                boxes_count = len(boxes)
         else:
-            raw_mask, _ = self.detector.detect_mask(img_bgr)
+            raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+            boxes_count = len(boxes)
 
-        # 2. Apply Morphological Dilation (anti-aliasing and stroke suppression)
+        # 2. Morphological Elliptical Dilation (eliminates anti-aliasing text stroke fringes)
         ksize = max(3, dilation_px * 2 + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
         dilated_mask = cv2.dilate(raw_mask, kernel)
 
-        # 3. If Custom Brush: Run LaMa Inpainting directly
-        if is_custom:
-            res_pil = self.lama(img_rgb, Image.fromarray(dilated_mask))
-            stats = {"flat": 0, "lama": 1, "total_regions": 1, "mode": "custom_brush"}
-            return res_pil, Image.fromarray(dilated_mask), stats
+        # 3. Execute IOPaint Inpainting (Full-Page Coherent or Smart Crop)
+        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask)
+        res_rgb = cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB)
 
-        # 4. Auto Clean: Partition into Regions with Generous Context Windows
-        joined = cv2.dilate(dilated_mask, np.ones((merge_margin, merge_margin), np.uint8))
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
+        stats = {
+            "model": self.iopaint.current_model_name,
+            "engine": "IOPaint",
+            "total_regions": 1 if is_custom else boxes_count,
+            "mode": "custom_brush" if is_custom else "auto",
+            "width": w,
+            "height": h
+        }
 
-        stats_counter = {"flat": 0, "lama": 0, "total_regions": max(0, num_labels - 1), "mode": "auto"}
-        result_bgr = img_bgr.copy()
-
-        for i in range(1, num_labels):
-            rx, ry, rw, rh, area = stats[i]
-            if area < 15:
-                continue
-
-            # Generous Context Window (at least 64px margin, minimum 256x256 patch for LaMa)
-            target_w = max(256, rw + 128)
-            target_h = max(256, rh + 128)
-            cx = rx + rw // 2
-            cy = ry + rh // 2
-            x1 = max(0, cx - target_w // 2)
-            y1 = max(0, cy - target_h // 2)
-            x2 = min(w, x1 + target_w)
-            y2 = min(h, y1 + target_h)
-            x1 = max(0, x2 - target_w)
-            y1 = max(0, y2 - target_h)
-
-            crop_img = result_bgr[y1:y2, x1:x2]
-            crop_mask = dilated_mask[y1:y2, x1:x2]
-
-            if not crop_mask.any():
-                continue
-
-            # Check if region is a STRICTLY pure-white flat speech bubble
-            ring_inner = cv2.dilate(crop_mask, np.ones((9, 9), np.uint8))
-            ring_outer = cv2.dilate(crop_mask, np.ones((27, 27), np.uint8))
-            ring = ring_outer & cv2.bitwise_not(ring_inner)
-            ring_pixels = crop_img[ring > 0]
-
-            is_pure_white_flat = False
-            if len(ring_pixels) > 50:
-                # Must be strictly uniform and bright white (>245)
-                if ring_pixels.std(axis=0).max() < 1.8 and ring_pixels.mean() > 245:
-                    is_pure_white_flat = True
-
-            if is_pure_white_flat:
-                # Pure white flat bubble -> crisp median fill
-                median_col = np.median(ring_pixels, axis=0).astype(np.uint8)
-                crop_img[crop_mask > 0] = median_col
-                stats_counter["flat"] += 1
-            else:
-                # All gradient bubbles, grey thought bubbles, screentones, and scenery:
-                # Inpaint with GPU LaMa with ample context!
-                crop_pil = Image.fromarray(cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB))
-                mask_pil = Image.fromarray(crop_mask)
-                res_pil = self.lama(crop_pil, mask_pil)
-                res_bgr = cv2.cvtColor(np.array(res_pil), cv2.COLOR_RGB2BGR)
-
-                crop_img[crop_mask > 0] = res_bgr[crop_mask > 0]
-                stats_counter["lama"] += 1
-
-            result_bgr[y1:y2, x1:x2] = crop_img
-
-        final_pil = Image.fromarray(cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB))
-        final_mask_pil = Image.fromarray(dilated_mask)
-
-        return final_pil, final_mask_pil, stats_counter
+        return Image.fromarray(res_rgb), Image.fromarray(dilated_mask), stats
 
 cleaner_pipeline = MangaCleanerPipeline()
 
@@ -357,19 +522,24 @@ class CleanPageReq(BaseModel):
     dilationPx: Optional[int] = 4
     flatThreshold: Optional[float] = 3.5
     mergeMargin: Optional[int] = 30
+    modelName: Optional[str] = None
 
 class InpaintReq(BaseModel):
     imageBase64: str
     maskBase64: str
+    modelName: Optional[str] = None
 
 class DetectReq(BaseModel):
     imageBase64: str
+
+class SwitchModelReq(BaseModel):
+    modelName: str
 
 class BatchFolderReq(BaseModel):
     inputDir: str
     outputDir: str
     dilationPx: Optional[int] = 4
-    flatThreshold: Optional[float] = 3.5
+    modelName: Optional[str] = None
 
 # Batch Progress State
 batch_status = {
@@ -387,14 +557,25 @@ def health():
         "status": "online",
         "device": device,
         "gpu": gpu_name,
-        "engine": "LaMa FFC & ComicTextDetector",
-        "lama_ready": cleaner_pipeline.lama.ready,
+        "engine": "IOPaint (Lama Cleaner) & ComicTextDetector",
+        "current_model": cleaner_pipeline.iopaint.current_model_name,
+        "iopaint_ready": cleaner_pipeline.iopaint.ready,
         "detector_ready": cleaner_pipeline.detector.ready,
+        "available_models": ["anime-lama", "lama"]
     }
 
 @app.get("/api/ping")
 def ping():
     return {"status": "ok", "time": time.time()}
+
+@app.post("/api/switch_model")
+def api_switch_model(req: SwitchModelReq):
+    success = cleaner_pipeline.iopaint.load_model(req.modelName)
+    return {
+        "success": success,
+        "current_model": cleaner_pipeline.iopaint.current_model_name,
+        "device": device
+    }
 
 @app.post("/api/clean_page")
 async def api_clean_page(req: CleanPageReq):
@@ -404,9 +585,8 @@ async def api_clean_page(req: CleanPageReq):
         cleaned_pil, mask_pil, stats = cleaner_pipeline.clean_image(
             img_pil=img,
             dilation_px=req.dilationPx or 4,
-            flat_threshold=req.flatThreshold or 3.5,
-            merge_margin=req.mergeMargin or 30,
-            custom_mask=custom_mask
+            custom_mask=custom_mask,
+            model_name=req.modelName
         )
         return {
             "success": True,
@@ -421,9 +601,11 @@ async def api_clean_page(req: CleanPageReq):
 @app.post("/api/inpaint")
 async def api_inpaint(req: InpaintReq):
     try:
+        if req.modelName:
+            cleaner_pipeline.iopaint.load_model(req.modelName)
         img = b64_to_pil(req.imageBase64)
         mask = b64_to_pil(req.maskBase64).convert("L")
-        cleaned = cleaner_pipeline.lama(img, mask)
+        cleaned = cleaner_pipeline.iopaint(img, mask)
         return {
             "success": True,
             "cleanedImageBase64": pil_to_b64(cleaned)
@@ -450,7 +632,7 @@ async def api_detect(req: DetectReq):
 # -------------------------------------------------------------
 # Batch Drive & Directory Runner
 # -------------------------------------------------------------
-def run_batch_thread(input_dir: str, output_dir: str, dilation: int = 4, flat_thresh: float = 3.5):
+def run_batch_thread(input_dir: str, output_dir: str, dilation: int = 4, model_name: str = "anime-lama"):
     global batch_status
     batch_status["running"] = True
     batch_status["logs"] = []
@@ -464,6 +646,9 @@ def run_batch_thread(input_dir: str, output_dir: str, dilation: int = 4, flat_th
             batch_status["running"] = False
             return
 
+        if model_name:
+            cleaner_pipeline.iopaint.load_model(model_name)
+
         os.makedirs(output_dir, exist_ok=True)
         valid_exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
         files = sorted([f for f in os.listdir(input_dir) if f.lower().endswith(valid_exts)])
@@ -474,7 +659,7 @@ def run_batch_thread(input_dir: str, output_dir: str, dilation: int = 4, flat_th
             return
 
         batch_status["total"] = len(files)
-        batch_status["logs"].append(f"📦 Bắt đầu xử lý {len(files)} trang truyện...")
+        batch_status["logs"].append(f"📦 Bắt đầu xử lý {len(files)} trang bằng mô hình IOPaint ({cleaner_pipeline.iopaint.current_model_name})...")
         batch_status["logs"].append(f"📂 Nguồn: {input_dir}")
         batch_status["logs"].append(f"📂 Xuất: {output_dir}")
 
@@ -489,11 +674,11 @@ def run_batch_thread(input_dir: str, output_dir: str, dilation: int = 4, flat_th
                 cleaned, _, stats = cleaner_pipeline.clean_image(
                     img,
                     dilation_px=dilation,
-                    flat_threshold=flat_thresh
+                    model_name=model_name
                 )
                 cleaned.save(out_path)
                 sec = time.time() - t0
-                batch_status["logs"].append(f"[{i}/{len(files)}] ✅ {fname} ({sec:.2f}s) - Thoại: {stats['flat']}, LaMa: {stats['lama']}")
+                batch_status["logs"].append(f"[{i}/{len(files)}] ✅ {fname} ({sec:.2f}s) - Kích thước: {img.width}x{img.height}, Vùng: {stats['total_regions']}")
                 if len(batch_status["sampleUrls"]) < 8:
                     batch_status["sampleUrls"].append(pil_to_b64(cleaned.resize((200, int(200 * cleaned.height / cleaned.width)))))
             except Exception as e:
@@ -510,11 +695,11 @@ async def api_batch_start(req: BatchFolderReq):
         return {"success": False, "error": "Đang có tiến trình batch chạy ngầm!"}
     th = threading.Thread(
         target=run_batch_thread,
-        args=(req.inputDir, req.outputDir, req.dilationPx or 4, req.flatThreshold or 3.5),
+        args=(req.inputDir, req.outputDir, req.dilationPx or 4, req.modelName or "anime-lama"),
         daemon=True
     )
     th.start()
-    return {"success": True, "message": "Đã khởi chạy tiến trình xử lý hàng loạt!"}
+    return {"success": True, "message": "Đã khởi chạy tiến trình xử lý hàng loạt IOPaint!"}
 
 @app.get("/api/batch_status")
 def api_batch_status():
@@ -529,7 +714,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Manga Text Cleaner & Inpainting Studio (LaMa FFC)</title>
+  <title>Manga Text Cleaner & Inpainting Studio (IOPaint / Lama Cleaner)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { background-color: #0b0f19; color: #f1f5f9; font-family: system-ui, -apple-system, sans-serif; }
@@ -545,16 +730,24 @@ WEB_UI_HTML = """<!DOCTYPE html>
   <!-- Header -->
   <header class="bg-slate-900/90 border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50 backdrop-blur-md">
     <div class="flex items-center space-x-3">
-      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-black text-xl shadow-lg shadow-indigo-500/20">🌸</div>
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center font-black text-xl shadow-lg shadow-indigo-500/20">🎨</div>
       <div>
-        <h1 class="text-base font-bold bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 bg-clip-text text-transparent">Manga Text Cleaner & Inpainting Studio</h1>
-        <p class="text-[11px] text-slate-400">LaMa FFC & ComicTextDetector Engine</p>
+        <h1 class="text-base font-bold bg-gradient-to-r from-indigo-300 via-purple-300 to-pink-300 bg-clip-text text-transparent">Manga Cleaner & Inpainting Studio</h1>
+        <p class="text-[11px] text-slate-400">Powered by <b>IOPaint</b> (Lama Cleaner) & ComicTextDetector</p>
       </div>
     </div>
-    <div class="flex items-center space-x-2">
+    <div class="flex items-center space-x-3">
+      <!-- Model Selector -->
+      <div class="flex items-center space-x-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
+        <span class="text-slate-400">Mô hình:</span>
+        <select id="model-select" onchange="onModelChange()" class="bg-transparent text-indigo-300 font-semibold focus:outline-none cursor-pointer">
+          <option value="anime-lama" class="bg-slate-900 text-white">🌸 Anime-Manga LaMa (Tối ưu Manga)</option>
+          <option value="lama" class="bg-slate-900 text-white">⚡ Big-LaMa (Mô hình IOPaint gốc)</option>
+        </select>
+      </div>
       <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 flex items-center gap-1.5">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        <span id="device-badge">AI Server Online</span>
+        <span id="device-badge">IOPaint Online</span>
       </span>
     </div>
   </header>
@@ -600,14 +793,14 @@ WEB_UI_HTML = """<!DOCTYPE html>
         </div>
 
         <!-- Action Button -->
-        <button onclick="processSingle()" id="btn-clean" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs shadow-xl shadow-indigo-600/30 flex items-center gap-2">
-          <span>⚡</span> <span id="clean-btn-text">XÓA TEXT & KHÔI PHỤC CHI TIẾT</span>
+        <button onclick="processSingle()" id="btn-clean" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:opacity-90 text-white font-bold text-xs shadow-xl shadow-indigo-600/30 flex items-center gap-2">
+          <span>⚡</span> <span id="clean-btn-text">XÓA TEXT VỚI IOPAINT</span>
         </button>
       </div>
 
       <!-- Hint Banner -->
       <div class="text-xs bg-indigo-950/40 border border-indigo-500/20 text-indigo-300 p-3 rounded-xl flex items-center justify-between">
-        <span>💡 <b>Mẹo:</b> Bạn có thể dùng cọ khoanh vùng chữ cần xóa. <b>Nếu không vẽ gì</b>, AI sẽ <b>Tự Động Quét & Xóa Toàn Bộ Trang</b>!</span>
+        <span>💡 <b>Cơ chế IOPaint:</b> Dùng cọ khoanh vùng chữ hoặc để trống để AI <b>Tự Động Quét & Tái Tạo Chi Tiết Bằng IOPaint</b>!</span>
         <span id="single-status" class="font-semibold text-emerald-400"></span>
       </div>
 
@@ -641,7 +834,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
               <div class="split-handle">↔</div>
             </div>
           </div>
-          <div id="output-placeholder" class="text-xs text-slate-500 italic">Kết quả khôi phục sẽ hiển thị tại đây</div>
+          <div id="output-placeholder" class="text-xs text-slate-500 italic">Kết quả khôi phục IOPaint sẽ hiển thị tại đây</div>
         </div>
       </div>
     </section>
@@ -649,9 +842,9 @@ WEB_UI_HTML = """<!DOCTYPE html>
     <!-- TAB 2: GOOGLE DRIVE BATCH -->
     <section id="sec-batch" class="space-y-6 hidden">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-        <h2 class="text-base font-bold text-white flex items-center gap-2"><span>📦</span> Dọn Sạch Toàn Bộ Chapter Từ Google Drive</h2>
+        <h2 class="text-base font-bold text-white flex items-center gap-2"><span>📦</span> Dọn Sạch Toàn Bộ Chapter Bằng IOPaint (Google Drive)</h2>
         <p class="text-xs text-slate-400 leading-relaxed">
-          Tự động duyệt qua toàn bộ các trang manga trong thư mục Google Drive, quét bong bóng thoại, nở biên triệt tiêu viền anti-aliasing và tái tạo nét vẽ bằng LaMa FFC.
+          Tự động duyệt qua toàn bộ các trang manga trong thư mục Google Drive, quét bong bóng thoại, nở biên triệt tiêu viền anti-aliasing và tái tạo chi tiết ảnh 1:1 bằng IOPaint.
         </p>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
@@ -672,7 +865,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
             <span>px</span>
           </div>
           <button onclick="startBatch()" id="btn-batch-start" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/20 flex items-center gap-2">
-            <span>🚀</span> <span>BẮT ĐẦU XỬ LÝ HÀNG LOẠT</span>
+            <span>🚀</span> <span>BẮT ĐẦU XỬ LÝ HÀNG LOẠT (IOPAINT)</span>
           </button>
         </div>
       </div>
@@ -703,9 +896,10 @@ WEB_UI_HTML = """<!DOCTYPE html>
         </p>
 
         <div class="space-y-2 text-xs font-mono bg-slate-950 p-4 rounded-xl border border-slate-800 text-slate-300">
-          <div><b class="text-emerald-400">POST</b> /api/clean_page <span class="text-slate-500">// Quét và tự động làm sạch cả trang</span></div>
+          <div><b class="text-emerald-400">POST</b> /api/clean_page <span class="text-slate-500">// Quét và tự động làm sạch cả trang với IOPaint</span></div>
           <div><b class="text-emerald-400">POST</b> /api/inpaint <span class="text-slate-500">// Inpaint vùng chọn từ cọ vẽ</span></div>
           <div><b class="text-emerald-400">POST</b> /api/detect <span class="text-slate-500">// Lấy danh sách hộp thoại manga</span></div>
+          <div><b class="text-emerald-400">POST</b> /api/switch_model <span class="text-slate-500">// Đổi mô hình (anime-lama / lama)</span></div>
           <div><b class="text-indigo-400">GET</b>  /health <span class="text-slate-500">// Kiểm tra thiết bị & GPU status</span></div>
         </div>
       </div>
@@ -735,6 +929,24 @@ WEB_UI_HTML = """<!DOCTYPE html>
           btn.className = "py-3 px-4 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2";
         }
       });
+    }
+
+    // Model Change
+    async function onModelChange() {
+      const model = document.getElementById('model-select').value;
+      try {
+        const res = await fetch('/api/switch_model', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelName: model })
+        });
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('single-status').innerText = `🔄 Đã chuyển sang mô hình IOPaint: ${data.current_model}`;
+        }
+      } catch (err) {
+        console.error(err);
+      }
     }
 
     // Brush Controls
@@ -831,11 +1043,11 @@ WEB_UI_HTML = """<!DOCTYPE html>
       const btn = document.getElementById('btn-clean');
       const btnText = document.getElementById('clean-btn-text');
       btn.disabled = true;
-      btnText.innerText = "ĐANG XỬ LÝ (LAMA FFC)...";
+      btnText.innerText = "ĐANG XỬ LÝ (IOPAINT)...";
 
       let maskBase64 = null;
       if (hasCustomMask) {
-        // Convert to binary
+        // Convert to binary mask
         const binCanvas = document.createElement('canvas');
         binCanvas.width = maskCanvas.width; binCanvas.height = maskCanvas.height;
         const bctx = binCanvas.getContext('2d');
@@ -854,6 +1066,8 @@ WEB_UI_HTML = """<!DOCTYPE html>
         maskBase64 = binCanvas.toDataURL('image/png');
       }
 
+      const activeModel = document.getElementById('model-select').value;
+
       try {
         const res = await fetch('/api/clean_page', {
           method: 'POST',
@@ -862,13 +1076,13 @@ WEB_UI_HTML = """<!DOCTYPE html>
             imageBase64: currentRawBase64,
             maskBase64: maskBase64,
             dilationPx: 4,
-            flatThreshold: 3.5
+            modelName: activeModel
           })
         });
         const data = await res.json();
         if (data.success) {
           showBeforeAfter(currentRawBase64, data.cleanedImageBase64);
-          document.getElementById('single-status').innerText = hasCustomMask ? "✅ Đã inpaint vùng chọn cọ vẽ" : `✅ Auto xóa ${data.stats.total_regions} vùng thoại`;
+          document.getElementById('single-status').innerText = hasCustomMask ? "✅ Đã inpaint vùng chọn với IOPaint" : `✅ Auto xóa ${data.stats.total_regions} vùng thoại bằng IOPaint (${data.stats.model})`;
         } else {
           alert("Lỗi: " + (data.detail || "Không thể xử lý ảnh"));
         }
@@ -876,7 +1090,7 @@ WEB_UI_HTML = """<!DOCTYPE html>
         alert("Lỗi kết nối tới AI: " + err);
       } finally {
         btn.disabled = false;
-        btnText.innerText = "XÓA TEXT & KHÔI PHỤC CHI TIẾT";
+        btnText.innerText = "XÓA TEXT VỚI IOPAINT";
       }
     }
 
@@ -930,11 +1144,12 @@ WEB_UI_HTML = """<!DOCTYPE html>
       const inDir = document.getElementById('batch-input').value.trim();
       const outDir = document.getElementById('batch-output').value.trim();
       const dilation = Number(document.getElementById('batch-dilation').value) || 4;
+      const activeModel = document.getElementById('model-select').value;
 
       const res = await fetch('/api/batch_start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inputDir: inDir, outputDir: outDir, dilationPx: dilation })
+        body: JSON.stringify({ inputDir: inDir, outputDir: outDir, dilationPx: dilation, modelName: activeModel })
       });
       const data = await res.json();
       if (!data.success) {
@@ -965,7 +1180,10 @@ WEB_UI_HTML = """<!DOCTYPE html>
 
     // Load server status
     fetch('/health').then(r => r.json()).then(d => {
-      document.getElementById('device-badge').innerText = d.device.toUpperCase() + ' (' + d.gpu + ')';
+      document.getElementById('device-badge').innerText = 'IOPaint ' + d.device.toUpperCase() + ' (' + d.gpu + ')';
+      if (d.current_model) {
+        document.getElementById('model-select').value = d.current_model;
+      }
     }).catch(() => {});
   </script>
 </body>
@@ -980,10 +1198,11 @@ def index_page():
 # CLI Entry Point
 # -------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Manga Cleaner & LaMa Inpainting Server")
+    parser = argparse.ArgumentParser(description="Manga Cleaner & IOPaint Inpainting Server")
     parser.add_argument("--batch", action="store_true", help="Run in Batch CLI mode")
     parser.add_argument("--input-dir", type=str, default="", help="Input directory for batch mode")
     parser.add_argument("--output-dir", type=str, default="", help="Output directory for batch mode")
+    parser.add_argument("--model", type=str, default="anime-lama", help="IOPaint model (anime-lama or lama)")
     parser.add_argument("--port", type=int, default=8000, help="Server port")
     args = parser.parse_args()
 
@@ -991,7 +1210,7 @@ if __name__ == "__main__":
         if not args.input_dir or not args.output_dir:
             print("❌ Error: --input-dir and --output-dir are required for batch mode!")
             sys.exit(1)
-        run_batch_thread(args.input_dir, args.output_dir)
+        run_batch_thread(args.input_dir, args.output_dir, model_name=args.model)
     else:
         config = uvicorn.Config(app=app, host="0.0.0.0", port=args.port, log_level="info")
         server = uvicorn.Server(config)

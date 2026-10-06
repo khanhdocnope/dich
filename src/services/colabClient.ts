@@ -51,9 +51,41 @@ export interface CleanPageResult {
   success: boolean;
   cleanedImageBase64?: string;
   maskBase64?: string;
-  stats?: { flat: number; lama: number; regions: number };
+  stats?: {
+    flat?: number;
+    lama?: number;
+    total_regions?: number;
+    regions?: number;
+    model?: string;
+    engine?: string;
+  };
   error?: string;
 }
+
+export const switchIOPaintModel = async (
+  serverUrl: string,
+  modelName: 'anime-lama' | 'lama'
+): Promise<{ success: boolean; currentModel?: string }> => {
+  if (!serverUrl) return { success: false };
+  try {
+    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const res = await fetch(`${cleanUrl}/api/switch_model`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: JSON.stringify({ modelName }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: data.success, currentModel: data.current_model };
+    }
+  } catch (e) {
+    console.warn('Switch IOPaint model failed:', e);
+  }
+  return { success: false };
+};
 
 export const cleanPageWithAI = async (
   serverUrl: string,

@@ -346,7 +346,7 @@ export const App: React.FC = () => {
     }
 
     setIsCleaningPage(true);
-    setProcessingStatus('Đang quét ký tự & khôi phục chi tiết bằng LaMa FFC...');
+    setProcessingStatus('Đang quét ký tự & khôi phục chi tiết bằng IOPaint...');
     try {
       const sourceImg = currentImage.rawUrl;
       const res = await cleanPageWithAI(colabConfig.serverUrl, sourceImg, {
@@ -360,9 +360,9 @@ export const App: React.FC = () => {
         if (selectedFilename) {
           await saveProjectMetadata(selectedFilename, bubbles, res.cleanedImageBase64);
         }
-        const flatCount = res.stats?.flat ?? 0;
-        const lamaCount = res.stats?.lama ?? 0;
-        alert(`🎉 Đã làm sạch trang thành công!\n• Thoại phẳng: ${flatCount} vùng\n• Chi tiết nét vẽ LaMa: ${lamaCount} vùng`);
+        const regions = res.stats?.total_regions ?? (res.stats?.regions ?? (res.stats?.lama ?? 0));
+        const modelName = res.stats?.model ? ` (${res.stats.model})` : '';
+        alert(`🎉 Đã làm sạch trang bằng IOPaint${modelName} thành công!\n• Số vùng chữ đã xóa & khôi phục: ${regions}`);
       } else {
         alert(`⚠️ Xử lý thất bại: ${res.error || 'Vui lòng kiểm tra lại Colab Server.'}`);
       }
