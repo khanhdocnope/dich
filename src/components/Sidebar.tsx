@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Images, 
   Search, 
@@ -6,14 +6,15 @@ import {
   Clock, 
   FileImage, 
   ChevronLeft, 
-  ChevronRight,
-  RefreshCw,
-  X,
-  ImagePlus,
-  Trash2,
-  FolderPlus,
+  ChevronRight, 
+  RefreshCw, 
+  X, 
+  ImagePlus, 
+  Trash2, 
+  FolderOpen,
   FolderCheck,
-  FolderOpen
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { PageItem } from '../types';
 
@@ -31,6 +32,94 @@ interface SidebarProps {
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
 }
+
+/**
+ * High-performance Lazy Thumbnail Component
+ * Uses IntersectionObserver so 50-100 4K images don't flood browser GPU texture RAM.
+ * Falls back gracefully to a stylized Error Placeholder if an image is corrupt.
+ */
+const LazySidebarThumbnail: React.FC<{
+  src: string;
+  alt: string;
+  className?: string;
+  isDone?: boolean;
+}> = ({ src, alt, className = '', isDone }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isInView, setIsInView] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    // Use IntersectionObserver with 150px margin for buttery-smooth pre-loading
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              setIsInView(true);
+              observer.disconnect();
+            }
+          });
+        },
+        { rootMargin: '150px' }
+      );
+
+      observer.observe(containerRef.current);
+      return () => observer.disconnect();
+    } else {
+      setIsInView(true);
+    }
+  }, []);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`w-12 h-16 rounded-lg bg-slate-950 overflow-hidden shrink-0 border border-slate-800/90 flex items-center justify-center relative select-none ${className}`}
+    >
+      {hasError ? (
+        <div
+          className="flex flex-col items-center justify-center p-1 text-center w-full h-full bg-red-950/40 border border-red-800/40"
+          title={`Lỗi nạp ảnh: ${alt}`}
+        >
+          <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 animate-bounce" />
+          <span className="text-[8px] text-red-300 font-semibold mt-0.5 leading-none">Hỏng</span>
+        </div>
+      ) : isInView ? (
+        <>
+          {!isLoaded && (
+            <div className="absolute inset-0 bg-slate-900/80 animate-pulse flex items-center justify-center">
+              <Loader2 className="w-3.5 h-3.5 text-indigo-400/50 animate-spin" />
+            </div>
+          )}
+          <img
+            src={src}
+            alt={alt}
+            decoding="async"
+            loading="lazy"
+            onLoad={() => setIsLoaded(true)}
+            onError={() => {
+              setHasError(true);
+              setIsLoaded(true);
+            }}
+            className={`w-full h-full object-cover transition-opacity duration-200 ${
+              isLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+        </>
+      ) : (
+        <div className="w-full h-full bg-slate-900/60" />
+      )}
+
+      {isDone && !hasError && (
+        <div className="absolute top-1 right-1 bg-emerald-500 text-white rounded-full p-0.5 shadow-md ring-1 ring-black/40">
+          <CheckCircle className="w-2.5 h-2.5" />
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   images,
@@ -52,7 +141,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-
   const filteredImages = images.filter((img) => {
     const matchesSearch = img.filename.toLowerCase().includes(searchTerm.toLowerCase());
     if (filter === 'done') return matchesSearch && img.status === 'done';
@@ -63,9 +151,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const doneCount = images.filter((img) => img.status === 'done').length;
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onAddImages(e.target.files);
-      e.target.value = '';
+    try {
+      if (e.target.files && e.target.files.length > 0) {
+        onAddImages(e.target.files);
+        e.target.value = '';
+      }
+    } catch (err) {
+      console.error('File input change error:', err);
     }
   };
 
@@ -83,6 +175,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         collapsed ? 'w-14' : 'w-72 sm:w-80'
       }`}
     >
+      {/* Mobile Bottom Sheet Pull Pill Handle */}
+      <div className="mobile-only flex justify-center w-full pt-1 pb-0.5">
+        <div className="bottom-sheet-drag-handle" />
+      </div>
+
       {/* Hidden File Input for Individual/Multiple Images */}
       <input
         type="file"
@@ -198,7 +295,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {images.length > 0 && onClearAllImages && (
                 <button
                   onClick={() => {
-                    if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách ảnh hiện tại?')) {
+                    if (window.confirm('Bạn có chắc chắn muốn xóa toàn bộ danh sách ảnh hiện tại? Thao tác này sẽ giải phóng toàn bộ bộ nhớ RAM.')) {
                       onClearAllImages();
                     }
                   }}
@@ -210,7 +307,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
           </div>
-
 
           {/* Search & Filter Bar */}
           <div className="p-3 border-b border-slate-800 space-y-2.5 shrink-0 bg-slate-950">
@@ -299,6 +395,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 const isSelected = img.filename === selectedFilename;
                 const isDone = img.status === 'done';
                 const isProgress = img.status === 'in_progress';
+                const thumbSrc = img.thumbnailUrl || img.rawUrl;
 
                 return (
                   <div
@@ -313,20 +410,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         : 'bg-slate-900/80 border-slate-800/80 hover:bg-slate-800 text-slate-300'
                     }`}
                   >
-                    {/* Thumbnail preview */}
-                    <div className="w-12 h-16 rounded-lg bg-slate-950 overflow-hidden shrink-0 border border-slate-800 flex items-center justify-center relative">
-                      <img
-                        src={img.rawUrl}
-                        alt={img.filename}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                      {isDone && (
-                        <div className="absolute top-1 right-1 bg-emerald-500 text-white rounded-full p-0.5 shadow">
-                          <CheckCircle className="w-2.5 h-2.5" />
-                        </div>
-                      )}
-                    </div>
+                    {/* Lazy Low-RAM Thumbnail */}
+                    <LazySidebarThumbnail
+                      src={thumbSrc}
+                      alt={img.filename}
+                      isDone={isDone}
+                    />
 
                     {/* Meta info */}
                     <div className="flex-1 min-w-0 pr-1">
@@ -403,7 +492,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <ImagePlus className="w-4 h-4" />
           </button>
 
-
           {images.map((img) => (
             <div
               key={img.filename}
@@ -415,10 +503,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }`}
               title={img.filename}
             >
-              <img src={img.rawUrl} alt={img.filename} className="w-full h-full object-cover" />
-              {img.status === 'done' && (
-                <div className="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full bg-emerald-400"></div>
-              )}
+              <LazySidebarThumbnail
+                src={img.thumbnailUrl || img.rawUrl}
+                alt={img.filename}
+                className="w-full h-full"
+                isDone={img.status === 'done'}
+              />
             </div>
           ))}
         </div>

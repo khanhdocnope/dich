@@ -16,10 +16,16 @@ import {
   Undo2,
   Redo2,
   RotateCcw,
-  Loader2
+  Loader2,
+  Compass,
+  ChevronDown,
+  ChevronUp,
+  Sliders,
+  AlertTriangle
 } from 'lucide-react';
 import { Bubble } from '../types';
 import { renderBubbleOnCanvas, defaultTextStyle } from '../services/typesettingEngine';
+import { triggerSelectionHaptic, triggerImpactHaptic } from '../services/haptics';
 
 interface CanvasEditorProps {
   rawImageUrl: string | null;
@@ -27,9 +33,10 @@ interface CanvasEditorProps {
   bubbles: Bubble[];
   selectedBubbleId: string | null;
   onSelectBubble: (id: string | null) => void;
-  onUpdateBubble: (bubble: Bubble) => void;
+  onUpdateBubble: (bubble: Bubble, commitToHistory?: boolean) => void;
   onAddBubble: (bubble: Bubble) => void;
   onDeleteBubble: (id: string) => void;
+  onCommitHistory?: () => void;
   onManualInpaintArea?: (maskBase64: string) => void;
   onAutoCleanPage?: () => void;
   isCleaningPage?: boolean;
@@ -52,6 +59,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   onUpdateBubble,
   onAddBubble,
   onDeleteBubble,
+  onCommitHistory,
   onManualInpaintArea,
   onAutoCleanPage,
   isCleaningPage = false,
@@ -68,6 +76,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,6 +93,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [startPan, setStartPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [spacePressed, setSpacePressed] = useState<boolean>(false);
   const [isDraggingFileOver, setIsDraggingFileOver] = useState<boolean>(false);
+
+  // Mini-map Navigator & Marching Ants States
+  const [isMinimapCollapsed, setIsMinimapCollapsed] = useState<boolean>(false);
+  const [isMinimapDragging, setIsMinimapDragging] = useState<boolean>(false);
+  const [imageLoadError, setImageLoadError] = useState<boolean>(false);
+  const dashOffsetRef = useRef<number>(0);
 
   // Track already loaded images so they NEVER re-trigger auto-fit or reset zoom/pan
   const lastLoadedRawUrlRef = useRef<string | null>(null);
@@ -181,6 +196,112 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     }
   }, [imgDimensions, viewLayer, splitPos]);
 
+  // Mini-map Navigator Render (Photoshop / Figma Standard)
+  const renderMinimap = useCallback(() => {
+    const mmCanvas = minimapCanvasRef.current;
+    if (!mmCanvas || !rawImgRef.current) return;
+    const mmCtx = mmCanvas.getContext('2d');
+    if (!mmCtx) return;
+
+    const { width: imgW, height: imgH } = imgDimensions;
+    const mmW = 160;
+    const mmH = Math.max(80, Math.round(mmW * (imgH / imgW)));
+
+    if (mmCanvas.width !== mmW || mmCanvas.height !== mmH) {
+      mmCanvas.width = mmW;
+      mmCanvas.height = mmH;
+    }
+
+    mmCtx.clearRect(0, 0, mmW, mmH);
+
+    // 1. Draw scaled background image
+    if (offscreenBgCanvasRef.current) {
+      mmCtx.drawImage(offscreenBgCanvasRef.current, 0, 0, mmW, mmH);
+    } else {
+      const bgImg = cleanedImgRef.current || rawImgRef.current;
+      mmCtx.drawImage(bgImg, 0, 0, mmW, mmH);
+    }
+
+    const scale = mmW / imgW;
+
+    // 2. Draw scaled bubble outlines on minimap
+    bubbles.forEach((b) => {
+      mmCtx.fillStyle = 'rgba(99, 102, 241, 0.45)';
+      mmCtx.strokeStyle = '#818cf8';
+      mmCtx.lineWidth = 1;
+      mmCtx.fillRect(b.x * scale, b.y * scale, b.width * scale, b.height * scale);
+      mmCtx.strokeRect(b.x * scale, b.y * scale, b.width * scale, b.height * scale);
+    });
+
+    // 3. Draw Viewport Rect (The area currently visible in workspace)
+    if (containerRef.current) {
+      const cw = containerRef.current.clientWidth;
+      const ch = containerRef.current.clientHeight;
+      const currentZ = zoomRef.current;
+      const currentPan = panRef.current;
+
+      const vpImgX = -currentPan.x / currentZ;
+      const vpImgY = -currentPan.y / currentZ;
+      const vpImgW = cw / currentZ;
+      const vpImgH = ch / currentZ;
+
+      const mmVpX = vpImgX * scale;
+      const mmVpY = vpImgY * scale;
+      const mmVpW = vpImgW * scale;
+      const mmVpH = vpImgH * scale;
+
+      // Neon Indigo Viewport Overlay
+      mmCtx.fillStyle = 'rgba(99, 102, 241, 0.25)';
+      mmCtx.fillRect(mmVpX, mmVpY, mmVpW, mmVpH);
+
+      mmCtx.strokeStyle = '#a5b4fc';
+      mmCtx.lineWidth = 1.5;
+      mmCtx.strokeRect(mmVpX, mmVpY, mmVpW, mmVpH);
+    }
+  }, [imgDimensions, bubbles]);
+
+  const moveViewportFromMinimap = useCallback((clientX: number, clientY: number) => {
+    if (!minimapCanvasRef.current || !containerRef.current) return;
+    const rect = minimapCanvasRef.current.getBoundingClientRect();
+    const clickX = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const clickY = Math.max(0, Math.min(clientY - rect.top, rect.height));
+
+    const { width: imgW, height: imgH } = imgDimensions;
+    const imgX = (clickX / rect.width) * imgW;
+    const imgY = (clickY / rect.height) * imgH;
+
+    const cw = containerRef.current.clientWidth;
+    const ch = containerRef.current.clientHeight;
+
+    const newPan = {
+      x: Math.round(cw / 2 - imgX * zoomRef.current),
+      y: Math.round(ch / 2 - imgY * zoomRef.current),
+    };
+
+    panRef.current = newPan;
+    setPan(newPan);
+  }, [imgDimensions]);
+
+  // Smooth Zoom Slider Handler (10% to 400%)
+  const handleZoomSlider = useCallback((percent: number) => {
+    const newZoom = Math.min(Math.max(percent / 100, 0.1), 4.0);
+    if (!containerRef.current) return;
+    const cw = containerRef.current.clientWidth;
+    const ch = containerRef.current.clientHeight;
+    const centerX = cw / 2;
+    const centerY = ch / 2;
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const nextPan = {
+      x: Math.round(centerX - (centerX - currentPan.x) * (newZoom / currentZoom)),
+      y: Math.round(centerY - (centerY - currentPan.y) * (newZoom / currentZoom)),
+    };
+    zoomRef.current = newZoom;
+    panRef.current = nextPan;
+    setZoom(newZoom);
+    setPan(nextPan);
+  }, []);
+
   // Render Canvas with rAF Throttling
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -221,19 +342,30 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
     const currentZ = zoomRef.current;
 
-    // 4. Selection Outline & 8-point Resize Handles for Active Bubble
+    // 4. Selection Outline & 8-point Resize Handles for Active Bubble (Figma Marching Ants & Neon Glow)
     if (selectedBubbleId && viewLayer !== 'original') {
       const selected = bubbles.find((b) => b.id === selectedBubbleId);
       if (selected) {
         ctx.save();
-        ctx.strokeStyle = '#6366f1';
+
+        // Outer Glow Halo
+        ctx.shadowColor = 'rgba(99, 102, 241, 0.85)';
+        ctx.shadowBlur = 12 / currentZ;
+        ctx.strokeStyle = '#312e81';
+        ctx.lineWidth = 3 / currentZ;
+        ctx.strokeRect(selected.x, selected.y, selected.width, selected.height);
+
+        // Inner Animated Marching Ants Dashed Stroke
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#a5b4fc';
         ctx.lineWidth = 2 / currentZ;
+        ctx.lineDashOffset = -dashOffsetRef.current;
         ctx.setLineDash([6 / currentZ, 4 / currentZ]);
         ctx.strokeRect(selected.x, selected.y, selected.width, selected.height);
         ctx.setLineDash([]);
 
-        // 8 handles (corners + midpoints)
-        const handleRadius = Math.max(4, 6 / currentZ);
+        // 8 Figma-style handles with white center and indigo border
+        const handleSize = Math.max(5, 7 / currentZ);
         const handles = [
           { name: 'nw', x: selected.x, y: selected.y },
           { name: 'n',  x: selected.x + selected.width / 2, y: selected.y },
@@ -247,11 +379,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
         handles.forEach((h) => {
           ctx.beginPath();
-          ctx.arc(h.x, h.y, handleRadius, 0, Math.PI * 2);
+          ctx.rect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
           ctx.fillStyle = '#ffffff';
           ctx.fill();
           ctx.strokeStyle = '#4f46e5';
-          ctx.lineWidth = 2 / currentZ;
+          ctx.lineWidth = 1.5 / currentZ;
           ctx.stroke();
         });
 
@@ -276,7 +408,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.stroke();
       ctx.restore();
     }
-  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox]);
+
+    // 6. Refresh Mini-map
+    renderMinimap();
+  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox, renderMinimap]);
 
   // RequestAnimationFrame Throttled Render Schedule
   const scheduleRender = useCallback(() => {
@@ -291,6 +426,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   scheduleRenderRef.current = scheduleRender;
   updateOffscreenBgRef.current = updateOffscreenBg;
+
+  // Marching Ants 60 FPS Animation Loop (Only active when a bubble is selected)
+  useEffect(() => {
+    if (!selectedBubbleId) return;
+
+    let animId: number;
+    const animateSelection = () => {
+      dashOffsetRef.current = (dashOffsetRef.current + 0.35) % 100;
+      scheduleRenderRef.current();
+      animId = requestAnimationFrame(animateSelection);
+    };
+
+    animId = requestAnimationFrame(animateSelection);
+    return () => cancelAnimationFrame(animId);
+  }, [selectedBubbleId]);
 
   // 1. Load Raw Image whenever rawImageUrl changes
   useEffect(() => {
@@ -310,12 +460,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       return;
     }
     lastLoadedRawUrlRef.current = rawImageUrl;
+    setImageLoadError(false);
 
     let isMounted = true;
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       if (!isMounted) return;
+      setImageLoadError(false);
       rawImgRef.current = img;
       const dims = { width: img.naturalWidth || 800, height: img.naturalHeight || 1200 };
       setImgDimensions(dims);
@@ -345,6 +497,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       updateOffscreenBgRef.current();
       scheduleRenderRef.current();
     };
+
+    img.onerror = () => {
+      if (!isMounted) return;
+      setImageLoadError(true);
+      rawImgRef.current = null;
+      lastLoadedRawUrlRef.current = null;
+      console.warn('CanvasEditor failed to load image:', rawImageUrl);
+    };
+
     img.src = rawImageUrl;
 
     return () => {
@@ -436,12 +597,42 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     };
   }, [rawImageUrl]);
 
-  // Spacebar pan listener
+  // Keyboard listener for Spacebar pan, Delete bubble, and Undo/Redo
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !spacePressed && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+      const isTextInput =
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable;
+
+      if (e.code === 'Space' && !spacePressed && !isTextInput) {
         e.preventDefault();
         setSpacePressed(true);
+        return;
+      }
+
+      // Delete / Backspace key to remove active bubble
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isTextInput && selectedBubbleId && !editingBubbleId) {
+        e.preventDefault();
+        triggerImpactHaptic();
+        onDeleteBubble(selectedBubbleId);
+        return;
+      }
+
+      // Undo / Redo Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (isCtrlOrCmd && !isTextInput) {
+        if (e.key === 'z' || e.key === 'Z') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            onRedo?.();
+          } else {
+            onUndo?.();
+          }
+        } else if (e.key === 'y' || e.key === 'Y') {
+          e.preventDefault();
+          onRedo?.();
+        }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -455,7 +646,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [spacePressed]);
+  }, [spacePressed, selectedBubbleId, editingBubbleId, onDeleteBubble, onUndo, onRedo]);
 
   // Zoom by factor centered on screen (used by toolbar buttons)
   const handleZoomBy = (factor: number) => {
@@ -555,6 +746,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       }
 
       if (clickedBubble) {
+        triggerSelectionHaptic();
         onSelectBubble(clickedBubble.id);
         setIsDraggingBubble(true);
         setDragStart({ x, y });
@@ -697,11 +889,26 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   };
 
   const handleMouseUp = () => {
+    // Check if dragging or resizing changed the bubble position/size -> commit to history
+    if ((isDraggingBubble || isResizingBubble) && selectedBubbleId && bubbleInitialPos) {
+      const selected = bubbles.find((b) => b.id === selectedBubbleId);
+      if (
+        selected &&
+        (selected.x !== bubbleInitialPos.x ||
+          selected.y !== bubbleInitialPos.y ||
+          selected.width !== bubbleInitialPos.w ||
+          selected.height !== bubbleInitialPos.h)
+      ) {
+        onCommitHistory?.();
+      }
+    }
+
     setIsPanning(false);
     setIsDraggingBubble(false);
     setIsResizingBubble(false);
     setIsBrushing(false);
     setResizeHandle(null);
+    setBubbleInitialPos(null);
 
     // Finalize Drag-to-Draw New Bubble
     if (isDrawingNewBubble) {
@@ -722,6 +929,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           isInpainted: false,
         };
         onAddBubble(newBubble);
+        triggerImpactHaptic();
         onSelectBubble(newBubble.id);
         setActiveTool('select');
       }
@@ -730,11 +938,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Global window listeners for drag & pan gestures so mouse doesn't get lost outside canvas
   useEffect(() => {
-    if (!isPanning && !isDraggingBubble && !isResizingBubble && !isBrushing && !isDrawingNewBubble) {
+    if (!isPanning && !isDraggingBubble && !isResizingBubble && !isBrushing && !isDrawingNewBubble && !isMinimapDragging) {
       return;
     }
 
     const onWindowMouseMove = (e: MouseEvent) => {
+      if (isMinimapDragging) {
+        moveViewportFromMinimap(e.clientX, e.clientY);
+        return;
+      }
+
       if (isPanning) {
         const newPan = { x: e.clientX - startPan.x, y: e.clientY - startPan.y };
         panRef.current = newPan;
@@ -816,6 +1029,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     };
 
     const onWindowMouseUp = () => {
+      setIsMinimapDragging(false);
       handleMouseUp();
     };
 
@@ -839,6 +1053,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     activeTool,
     isDrawingNewBubble,
     drawStartPos,
+    isMinimapDragging,
+    moveViewportFromMinimap,
   ]);
 
   // Double Click for Direct Inline Text Editing
@@ -853,35 +1069,46 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       }
     }
     if (clicked) {
+      triggerSelectionHaptic();
       onSelectBubble(clicked.id);
       setEditingBubbleId(clicked.id);
       setInlineEditText(clicked.translatedText || clicked.originalText || '');
     }
   };
 
-  // Touch Gesture Handling
+  // Mobile Pinch-to-Zoom & Touch Gesture Handling with Image Anchor Centering
   const touchStateRef = useRef<{
     initialDist: number;
     initialZoom: number;
-    initialPan: { x: number; y: number };
-    center: { x: number; y: number };
+    anchorImgX: number;
+    anchorImgY: number;
   } | null>(null);
 
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2) {
+    if (e.touches.length === 2 && containerRef.current) {
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const centerX = (t1.clientX + t2.clientX) / 2;
-      const centerY = (t1.clientY + t2.clientY) / 2;
+      const rect = containerRef.current.getBoundingClientRect();
+      const centerInContainerX = (t1.clientX + t2.clientX) / 2 - rect.left;
+      const centerInContainerY = (t1.clientY + t2.clientY) / 2 - rect.top;
+
+      // Anchor point on the unscaled image plane
+      const currentZ = zoomRef.current;
+      const currentP = panRef.current;
+      const anchorImgX = (centerInContainerX - currentP.x) / currentZ;
+      const anchorImgY = (centerInContainerY - currentP.y) / currentZ;
+
       touchStateRef.current = {
-        initialDist: dist,
-        initialZoom: zoomRef.current,
-        initialPan: { ...panRef.current },
-        center: { x: centerX, y: centerY },
+        initialDist: Math.max(dist, 1),
+        initialZoom: currentZ,
+        anchorImgX,
+        anchorImgY,
       };
       setIsPanning(false);
       setIsDraggingBubble(false);
+      setIsResizingBubble(false);
+      setIsBrushing(false);
     } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       const fakeMouseEvent = {
@@ -900,18 +1127,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const t1 = e.touches[0];
       const t2 = e.touches[1];
       const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
-      const centerX = (t1.clientX + t2.clientX) / 2;
-      const centerY = (t1.clientY + t2.clientY) / 2;
+      const rect = containerRef.current.getBoundingClientRect();
+      const centerInContainerX = (t1.clientX + t2.clientX) / 2 - rect.left;
+      const centerInContainerY = (t1.clientY + t2.clientY) / 2 - rect.top;
 
       const scaleChange = dist / touchStateRef.current.initialDist;
-      const newZoom = Math.min(Math.max(touchStateRef.current.initialZoom * scaleChange, 0.1), 4.5);
+      const newZoom = Math.min(Math.max(touchStateRef.current.initialZoom * scaleChange, 0.08), 5.0);
 
-      const rect = containerRef.current.getBoundingClientRect();
-      const mouseX = touchStateRef.current.center.x - rect.left;
-      const mouseY = touchStateRef.current.center.y - rect.top;
-
-      const newPanX = mouseX - (mouseX - touchStateRef.current.initialPan.x) * (newZoom / touchStateRef.current.initialZoom) + (centerX - touchStateRef.current.center.x);
-      const newPanY = mouseY - (mouseY - touchStateRef.current.initialPan.y) * (newZoom / touchStateRef.current.initialZoom) + (centerY - touchStateRef.current.center.y);
+      // Keep the exact image point centered between fingers
+      const newPanX = Math.round(centerInContainerX - touchStateRef.current.anchorImgX * newZoom);
+      const newPanY = Math.round(centerInContainerY - touchStateRef.current.anchorImgY * newZoom);
 
       zoomRef.current = newZoom;
       panRef.current = { x: newPanX, y: newPanY };
@@ -1251,33 +1476,43 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             )}
           </div>
 
-          {/* Zoom Controls Segment */}
-          <div className="segmented-group">
+          {/* Photoshop / Figma Zoom Controls Segment */}
+          <div className="segmented-group flex items-center">
             <button
               onClick={() => handleZoomBy(0.85)}
               className="btn-icon"
-              title="Thu nhỏ"
+              title="Thu nhỏ (Zoom Out)"
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
+            <input
+              type="range"
+              min="10"
+              max="400"
+              step="5"
+              value={Math.round(zoom * 100)}
+              onChange={(e) => handleZoomSlider(Number(e.target.value))}
+              className="zoom-slider-range w-16 md:w-24 desktop-inline cursor-pointer mx-1"
+              title={`Thu phóng: ${Math.round(zoom * 100)}%`}
+            />
             <button
               onClick={() => setZoomPreset(1.0)}
-              className="segmented-btn font-mono text-[11px] px-1.5 desktop-inline"
-              title="Đặt 100% kích thước thực"
+              className="segmented-btn font-mono text-[11px] px-1.5 min-w-[42px] text-center"
+              title="Nhấp để đặt 100% kích thước thực"
             >
               {Math.round(zoom * 100)}%
             </button>
             <button
               onClick={() => handleZoomBy(1.15)}
               className="btn-icon"
-              title="Phóng to"
+              title="Phóng to (Zoom In)"
             >
               <ZoomIn className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleFitScreen}
               className="btn-icon"
-              title="Vừa vặn màn hình"
+              title="Vừa vặn màn hình (Fit View)"
             >
               <Maximize className="w-3.5 h-3.5" />
             </button>
@@ -1354,7 +1589,26 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
 
       {/* Main Canvas Viewport or Empty State */}
-      {rawImageUrl ? (
+      {imageLoadError ? (
+        <div className="flex-1 w-full h-full flex flex-col items-center justify-center p-6 space-y-4 select-none">
+          <div className="p-4 rounded-3xl bg-red-950/60 border border-red-800/60 text-red-400 shadow-xl shadow-red-950/40 animate-pulse">
+            <AlertTriangle className="w-12 h-12" />
+          </div>
+          <div className="text-center space-y-1.5 max-w-sm">
+            <h3 className="text-base font-bold text-white">Không thể giải mã trang truyện</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              File ảnh bị lỗi định dạng, hỏng cấu trúc hoặc đã bị giải phóng khỏi bộ nhớ RAM. Vui lòng thử nạp lại file từ thiết bị.
+            </p>
+          </div>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="btn-primary text-xs"
+          >
+            <ImagePlus className="w-4 h-4 mr-1.5" />
+            <span>Nạp Lại Trang Khác</span>
+          </button>
+        </div>
+      ) : rawImageUrl ? (
         <div
           ref={containerRef}
           onMouseDown={handleMouseDown}
@@ -1363,6 +1617,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           onDoubleClick={handleDoubleClick}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           className="flex-1 w-full h-full overflow-hidden relative"
           style={{
             cursor:
@@ -1488,6 +1744,68 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Mini-map Navigator HUD (Photoshop / Figma Standard) */}
+      {rawImageUrl && (
+        <div className="desktop-only absolute bottom-3 right-4 z-20 select-none">
+          <div className="navigator-hud bg-slate-950/90 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-xl transition-all w-48">
+            {/* Header */}
+            <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-200 font-semibold">
+              <div className="flex items-center space-x-1.5">
+                <Compass className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Bản Đồ</span>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                <span className="font-mono text-[10px] text-indigo-300 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/40">
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  onClick={() => setIsMinimapCollapsed((prev) => !prev)}
+                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                  title={isMinimapCollapsed ? 'Mở rộng bản đồ' : 'Thu gọn bản đồ'}
+                >
+                  {isMinimapCollapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Mini-map Body */}
+            {!isMinimapCollapsed && (
+              <div className="p-2 space-y-2">
+                <div className="relative rounded-lg overflow-hidden border border-slate-800/90 bg-slate-900 flex items-center justify-center">
+                  <canvas
+                    ref={minimapCanvasRef}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsMinimapDragging(true);
+                      moveViewportFromMinimap(e.clientX, e.clientY);
+                    }}
+                    className="cursor-crosshair block w-full h-auto object-contain"
+                    title="Kéo hoặc click để di chuyển vùng nhìn màn hình"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] text-slate-400">
+                  <button
+                    onClick={handleFitScreen}
+                    className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 hover:text-white border border-slate-800 transition-all flex items-center space-x-1"
+                  >
+                    <Maximize className="w-2.5 h-2.5 text-indigo-400" />
+                    <span>Toàn Màn</span>
+                  </button>
+                  <button
+                    onClick={() => setZoomPreset(1.0)}
+                    className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 hover:text-white border border-slate-800 transition-all font-mono"
+                  >
+                    100%
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

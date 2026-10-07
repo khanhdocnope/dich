@@ -1,7 +1,7 @@
 import { PageItem, Bubble, ColabConfig } from '../types';
 
 const DB_NAME = 'MangaStudioDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Upgraded version for thumbnail support
 const STORE_IMAGES = 'images';
 
 /**
@@ -50,13 +50,125 @@ export const createSafeObjectURL = (source: Blob | string): string => {
 };
 
 /**
- * Revoke Object URL to immediately free RAM
+ * Revoke Object URL to immediately free RAM from browser memory
  */
 export const revokeSafeObjectURL = (url?: string | null) => {
-  if (url && url.startsWith('blob:')) {
+  if (url && typeof url === 'string' && url.startsWith('blob:')) {
     try {
       URL.revokeObjectURL(url);
     } catch {}
+  }
+};
+
+/**
+ * Revoke all Object URLs associated with a single PageItem
+ */
+export const revokePageObjectUrls = (page: PageItem) => {
+  if (!page) return;
+  revokeSafeObjectURL(page.rawUrl);
+  revokeSafeObjectURL(page.thumbnailUrl);
+  revokeSafeObjectURL(page.outputUrl);
+  if (page.metadata?.cleanedImageBase64) {
+    revokeSafeObjectURL(page.metadata.cleanedImageBase64);
+  }
+};
+
+/**
+ * Generate lightweight, high-performance WebP/JPEG thumbnail Blob (max 200px) from raw Blob
+ * Prevents decoding massive 4K full-resolution bitmaps in Sidebar lists.
+ */
+export const generateThumbnailBlob = async (
+  sourceBlob: Blob,
+  maxDimension = 200,
+  quality = 0.72
+): Promise<Blob> => {
+  try {
+    // 1. Try modern createImageBitmap for blazing fast background decoding
+    if ('createImageBitmap' in window) {
+      try {
+        const bitmap = await createImageBitmap(sourceBlob);
+        const { width, height } = bitmap;
+        const scale = Math.min(maxDimension / width, maxDimension / height, 1.0);
+        const thumbW = Math.max(1, Math.round(width * scale));
+        const thumbH = Math.max(1, Math.round(height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = thumbW;
+        canvas.height = thumbH;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'medium';
+          ctx.drawImage(bitmap, 0, 0, thumbW, thumbH);
+          bitmap.close();
+
+          return await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob(
+              (blob) => {
+                if (blob) resolve(blob);
+                else reject(new Error('Canvas toBlob returned null'));
+              },
+              'image/webp',
+              quality
+            );
+          });
+        }
+      } catch {
+        // Fallback to HTMLImageElement below if createImageBitmap fails on specific format
+      }
+    }
+
+    // 2. Standard HTMLImageElement Fallback
+    return await new Promise<Blob>((resolve, reject) => {
+      const tempUrl = URL.createObjectURL(sourceBlob);
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+
+      img.onload = () => {
+        try {
+          const { naturalWidth: width, naturalHeight: height } = img;
+          const scale = Math.min(maxDimension / width, maxDimension / height, 1.0);
+          const thumbW = Math.max(1, Math.round(width * scale));
+          const thumbH = Math.max(1, Math.round(height * scale));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = thumbW;
+          canvas.height = thumbH;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            URL.revokeObjectURL(tempUrl);
+            return reject(new Error('Cannot get 2d context for thumbnail canvas'));
+          }
+
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'medium';
+          ctx.drawImage(img, 0, 0, thumbW, thumbH);
+          URL.revokeObjectURL(tempUrl);
+
+          canvas.toBlob(
+            (blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error('Canvas toBlob failed'));
+            },
+            'image/jpeg',
+            quality
+          );
+        } catch (err) {
+          URL.revokeObjectURL(tempUrl);
+          reject(err);
+        }
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(tempUrl);
+        reject(new Error('Failed to load image for thumbnail creation (corrupted or unsupported format)'));
+      };
+
+      img.src = tempUrl;
+    });
+  } catch (err) {
+    console.warn('Thumbnail generation failed, falling back to original blob:', err);
+    return sourceBlob;
   }
 };
 
@@ -101,6 +213,15 @@ export const getAllStoredImages = async (): Promise<PageItem[]> => {
           if (item.rawBlob) {
             rawUrl = URL.createObjectURL(item.rawBlob);
           }
+
+          let thumbnailUrl = item.thumbnailUrl;
+          if (item.thumbnailBlob) {
+            thumbnailUrl = URL.createObjectURL(item.thumbnailBlob);
+          } else if (item.rawBlob) {
+            // Lazy fallback: use rawUrl, background generation will update it
+            thumbnailUrl = rawUrl;
+          }
+
           let outputUrl = item.outputUrl;
           if (item.outputBlob) {
             outputUrl = URL.createObjectURL(item.outputBlob);
@@ -115,6 +236,7 @@ export const getAllStoredImages = async (): Promise<PageItem[]> => {
           return {
             ...item,
             rawUrl,
+            thumbnailUrl,
             outputUrl,
             metadata,
           };
@@ -146,9 +268,13 @@ export const saveStoredImage = async (item: PageItem): Promise<boolean> => {
       if (!dbItem.rawBlob && dbItem.rawUrl && dbItem.rawUrl.startsWith('data:')) {
         dbItem.rawBlob = dataURLToBlob(dbItem.rawUrl);
       }
-      // If rawUrl is a blob URL, don't store blob URL string in IDB
       if (dbItem.rawUrl && dbItem.rawUrl.startsWith('blob:')) {
         delete dbItem.rawUrl;
+      }
+
+      // Preserve thumbnail blob
+      if (dbItem.thumbnailUrl && dbItem.thumbnailUrl.startsWith('blob:')) {
+        delete dbItem.thumbnailUrl;
       }
 
       // Convert outputUrl Base64 to Blob if needed
@@ -196,6 +322,10 @@ export const saveMultipleStoredImages = async (items: PageItem[]): Promise<boole
         }
         if (dbItem.rawUrl && dbItem.rawUrl.startsWith('blob:')) {
           delete dbItem.rawUrl;
+        }
+
+        if (dbItem.thumbnailUrl && dbItem.thumbnailUrl.startsWith('blob:')) {
+          delete dbItem.thumbnailUrl;
         }
 
         if (!dbItem.outputBlob && dbItem.outputUrl && dbItem.outputUrl.startsWith('data:')) {
@@ -279,11 +409,12 @@ export const readFileAsDataURL = (file: File): Promise<string> => {
 };
 
 /**
- * Import files selected by user from Gallery / Storage using zero-copy Blobs and Object URLs
+ * Import files selected by user with automatic thumbnail generation and zero-copy Blobs
  */
 export const importImagesFromFiles = async (
   files: FileList | File[],
-  existingImages: PageItem[] = []
+  existingImages: PageItem[] = [],
+  onErrorCallback?: (filename: string, errorMsg: string) => void
 ): Promise<PageItem[]> => {
   const fileArray = Array.from(files);
   const newItems: PageItem[] = [];
@@ -291,7 +422,10 @@ export const importImagesFromFiles = async (
 
   for (let i = 0; i < fileArray.length; i++) {
     const file = fileArray[i];
-    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|bmp|gif)$/i.test(file.name)) continue;
+    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|bmp|gif|avif)$/i.test(file.name)) {
+      onErrorCallback?.(file.name, 'Định dạng không hỗ trợ (chỉ nhận JPG, PNG, WEBP, BMP, GIF, AVIF)');
+      continue;
+    }
 
     let filename = file.name;
     // Handle name collision
@@ -304,12 +438,24 @@ export const importImagesFromFiles = async (
     existingNames.add(filename);
 
     try {
-      // Zero-copy: Create Object URL directly from File object (Blob)
+      // 1. Generate lightweight thumbnail
+      let thumbBlob: Blob | undefined;
+      let thumbUrl: string | null = null;
+      try {
+        thumbBlob = await generateThumbnailBlob(file, 200, 0.72);
+        thumbUrl = URL.createObjectURL(thumbBlob);
+      } catch (thumbErr) {
+        console.warn(`Could not generate thumbnail for ${file.name}, using raw:`, thumbErr);
+      }
+
+      // 2. Zero-copy: Create Object URL directly from File object (Blob)
       const blobUrl = URL.createObjectURL(file);
       const newItem: PageItem = {
         filename,
         rawUrl: blobUrl,
         rawBlob: file,
+        thumbnailUrl: thumbUrl || blobUrl,
+        thumbnailBlob: thumbBlob || file,
         outputUrl: null,
         status: 'raw',
         metadata: {
@@ -318,8 +464,9 @@ export const importImagesFromFiles = async (
         },
       };
       newItems.push(newItem);
-    } catch (err) {
+    } catch (err: any) {
       console.error(`Failed to process file ${file.name}:`, err);
+      onErrorCallback?.(file.name, err.message || 'Lỗi khi đọc file ảnh');
     }
   }
 
@@ -372,4 +519,3 @@ export const saveStoredColabConfig = (config: ColabConfig) => {
     console.warn('Could not save Colab config:', e);
   }
 };
-

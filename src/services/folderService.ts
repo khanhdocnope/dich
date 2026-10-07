@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import JSZip from 'jszip';
 import { PageItem } from '../types';
-import { readFileAsDataURL, saveMultipleStoredImages } from './storage';
+import { readFileAsDataURL, saveMultipleStoredImages, generateThumbnailBlob } from './storage';
 
 // In-memory directory handle for Web File System Access API
 let webDirectoryHandle: any = null;
@@ -101,11 +101,22 @@ export const importImagesFromFolderOrFiles = async (
     }
 
     try {
+      let thumbBlob: Blob | undefined;
+      let thumbUrl: string | null = null;
+      try {
+        thumbBlob = await generateThumbnailBlob(file, 200, 0.72);
+        thumbUrl = URL.createObjectURL(thumbBlob);
+      } catch (thumbErr) {
+        console.warn(`Could not generate thumbnail for ${file.name}, using raw:`, thumbErr);
+      }
+
       const blobUrl = URL.createObjectURL(file);
       newItems.push({
         filename,
         rawUrl: blobUrl,
         rawBlob: file,
+        thumbnailUrl: thumbUrl || blobUrl,
+        thumbnailBlob: thumbBlob || file,
         outputUrl: null,
         status: 'raw',
         metadata: {

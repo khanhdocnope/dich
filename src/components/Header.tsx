@@ -74,20 +74,22 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center space-x-2">
         {/* Undo / Redo buttons */}
         {onUndo && (
-          <div className="flex items-center space-x-1 border-r border-slate-800 pr-2 mr-1">
+          <div className="flex items-center space-x-1 border-r border-slate-800/80 pr-2 mr-1">
             <button
               onClick={onUndo}
               disabled={!canUndo}
-              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-all"
+              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:bg-slate-700 disabled:opacity-25 disabled:cursor-not-allowed transition-all"
               title="Hoàn tác thao tác trước (Ctrl + Z)"
+              aria-label="Hoàn tác"
             >
               <Undo2 className="w-4 h-4" />
             </button>
             <button
               onClick={onRedo}
               disabled={!canRedo}
-              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-all"
-              title="Làm lại (Ctrl + Y)"
+              className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 active:bg-slate-700 disabled:opacity-25 disabled:cursor-not-allowed transition-all"
+              title="Làm lại thao tác vừa hoàn tác (Ctrl + Y hoặc Ctrl + Shift + Z)"
+              aria-label="Làm lại"
             >
               <Redo2 className="w-4 h-4" />
             </button>

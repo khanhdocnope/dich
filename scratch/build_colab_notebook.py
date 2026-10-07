@@ -226,10 +226,10 @@ class IOPaintEngine:
     def forward(self, pad_image_rgb: np.ndarray, pad_mask: np.ndarray) -> np.ndarray:
         img_norm = norm_img(pad_image_rgb)
         mask_norm = norm_img(pad_mask)
-        mask_norm = (mask_norm > 0) * 1.0
+        mask_norm = (mask_norm > 0).astype(np.float32)
 
-        img_t = torch.from_numpy(img_norm).unsqueeze(0).to(self.dev)
-        mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(self.dev)
+        img_t = torch.from_numpy(img_norm).unsqueeze(0).to(self.dev, dtype=torch.float32)
+        mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(self.dev, dtype=torch.float32)
 
         with torch.inference_mode():
             out = self.model(img_t, mask_t)

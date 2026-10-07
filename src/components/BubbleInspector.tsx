@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { 
   Type, 
   Trash2, 
@@ -19,15 +19,17 @@ import {
 } from 'lucide-react';
 import { Bubble, TextStyle } from '../types';
 import { defaultTextStyle } from '../services/typesettingEngine';
+import { triggerSelectionHaptic, triggerImpactHaptic } from '../services/haptics';
 
 interface BubbleInspectorProps {
   bubbles: Bubble[];
   selectedBubbleId: string | null;
   onSelectBubble: (id: string | null) => void;
-  onUpdateBubble: (bubble: Bubble) => void;
+  onUpdateBubble: (bubble: Bubble, commitToHistory?: boolean) => void;
   onDeleteBubble: (id: string) => void;
   onAddBubble: () => void;
   onReTranslateBubble: (bubble: Bubble) => void;
+  onCommitHistory?: () => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
 }
@@ -53,38 +55,81 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
   onDeleteBubble,
   onAddBubble,
   onReTranslateBubble,
+  onCommitHistory,
   isOpenMobile = false,
   onCloseMobile,
 }) => {
   const selectedBubble = bubbles.find((b) => b.id === selectedBubbleId);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const updateStyle = (patch: Partial<TextStyle>) => {
+  const scheduleHistoryCommit = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      onCommitHistory?.();
+      debounceTimerRef.current = null;
+    }, 400);
+  }, [onCommitHistory]);
+
+  const flushHistoryCommit = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+      onCommitHistory?.();
+    }
+  }, [onCommitHistory]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  const updateStyle = (patch: Partial<TextStyle>, commitNow: boolean = false) => {
     if (!selectedBubble) return;
-    onUpdateBubble({
+    const updated: Bubble = {
       ...selectedBubble,
       style: {
         ...selectedBubble.style,
         ...patch,
       },
-    });
+    };
+    if (commitNow) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      onUpdateBubble(updated, true);
+    } else {
+      onUpdateBubble(updated, false);
+      scheduleHistoryCommit();
+    }
   };
 
   // Quick Background Presets
   const applyPresetBackground = (preset: 'transparent' | 'white' | 'black' | 'custom') => {
     if (!selectedBubble) return;
     if (preset === 'transparent') {
-      updateStyle({ boxPreset: 'transparent', backgroundColor: '#ffffff', backgroundOpacity: 0 });
+      updateStyle({ boxPreset: 'transparent', backgroundColor: '#ffffff', backgroundOpacity: 0 }, true);
     } else if (preset === 'white') {
-      updateStyle({ boxPreset: 'white', backgroundColor: '#ffffff', backgroundOpacity: 1, borderRadius: 16 });
+      updateStyle({ boxPreset: 'white', backgroundColor: '#ffffff', backgroundOpacity: 1, borderRadius: 16 }, true);
     } else if (preset === 'black') {
-      updateStyle({ boxPreset: 'black', backgroundColor: '#000000', backgroundOpacity: 1, color: '#ffffff', borderRadius: 16 });
+      updateStyle({ boxPreset: 'black', backgroundColor: '#000000', backgroundOpacity: 1, color: '#ffffff', borderRadius: 16 }, true);
     } else if (preset === 'custom') {
-      updateStyle({ boxPreset: 'custom', backgroundOpacity: 1 });
+      updateStyle({ boxPreset: 'custom', backgroundOpacity: 1 }, true);
     }
   };
 
   return (
     <aside className={`inspector-drawer ${isOpenMobile ? 'open' : ''} w-80 h-full glass-panel border-l border-slate-800 flex flex-col z-20 select-none`}>
+      {/* Mobile Bottom Sheet Pull Pill Handle */}
+      <div className="mobile-only flex justify-center w-full pt-1 pb-0.5">
+        <div className="bottom-sheet-drag-handle" />
+      </div>
+
       {/* Header */}
       <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
         <div className="flex items-center space-x-2">
@@ -95,7 +140,10 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
         </div>
         <div className="flex items-center space-x-1.5">
           <button
-            onClick={onAddBubble}
+            onClick={() => {
+              triggerImpactHaptic();
+              onAddBubble();
+            }}
             className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center space-x-1 text-xs"
             title="Tạo thêm ô thoại mới"
           >
@@ -119,7 +167,10 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
         {bubbles.map((b, idx) => (
           <button
             key={b.id}
-            onClick={() => onSelectBubble(b.id)}
+            onClick={() => {
+              triggerSelectionHaptic();
+              onSelectBubble(b.id);
+            }}
             className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all shrink-0 border ${
               b.id === selectedBubbleId
                 ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
@@ -206,6 +257,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     type="color"
                     value={selectedBubble.style.backgroundColor || '#ffffff'}
                     onChange={(e) => updateStyle({ backgroundColor: e.target.value, backgroundOpacity: selectedBubble.style.backgroundOpacity === 0 ? 1 : selectedBubble.style.backgroundOpacity })}
+                    onBlur={flushHistoryCommit}
                     className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent"
                   />
                   <input
@@ -215,6 +267,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     step="0.05"
                     value={selectedBubble.style.backgroundOpacity ?? 0}
                     onChange={(e) => updateStyle({ backgroundOpacity: Number(e.target.value) })}
+                    onMouseUp={flushHistoryCommit}
+                    onTouchEnd={flushHistoryCommit}
                     className="flex-1 accent-indigo-500"
                   />
                 </div>
@@ -232,6 +286,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                       max="40"
                       value={selectedBubble.style.borderRadius ?? 16}
                       onChange={(e) => updateStyle({ borderRadius: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
                       className="w-full accent-indigo-500"
                     />
                   </div>
@@ -247,6 +303,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                       max="24"
                       value={selectedBubble.style.boxPadding ?? 8}
                       onChange={(e) => updateStyle({ boxPadding: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
                       className="w-full accent-indigo-500"
                     />
                   </div>
@@ -263,9 +321,11 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                 </label>
                 <textarea
                   value={selectedBubble.originalText}
-                  onChange={(e) =>
-                    onUpdateBubble({ ...selectedBubble, originalText: e.target.value })
-                  }
+                  onChange={(e) => {
+                    onUpdateBubble({ ...selectedBubble, originalText: e.target.value }, false);
+                    scheduleHistoryCommit();
+                  }}
+                  onBlur={flushHistoryCommit}
                   placeholder="Văn bản gốc tiếng Nhật/Trung/Anh..."
                   rows={2}
                   className="w-full bg-slate-950 border border-slate-800 text-xs rounded-lg p-2 text-slate-200 focus:outline-none focus:border-indigo-500/50 resize-none font-mono"
@@ -288,9 +348,11 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                 </div>
                 <textarea
                   value={selectedBubble.translatedText}
-                  onChange={(e) =>
-                    onUpdateBubble({ ...selectedBubble, translatedText: e.target.value })
-                  }
+                  onChange={(e) => {
+                    onUpdateBubble({ ...selectedBubble, translatedText: e.target.value }, false);
+                    scheduleHistoryCommit();
+                  }}
+                  onBlur={flushHistoryCommit}
                   placeholder="Nội dung dịch tiếng Việt..."
                   rows={3}
                   className="w-full bg-slate-950 border border-indigo-900/40 text-xs rounded-lg p-2 text-slate-100 focus:outline-none focus:border-indigo-500 font-medium resize-none shadow-inner"
@@ -310,7 +372,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                 <label className="text-[10px] text-slate-400 block mb-1">Kiểu Font:</label>
                 <select
                   value={selectedBubble.style.fontFamily}
-                  onChange={(e) => updateStyle({ fontFamily: e.target.value })}
+                  onChange={(e) => updateStyle({ fontFamily: e.target.value }, true)}
                   className="w-full bg-slate-950 border border-slate-800 text-xs rounded-lg p-2 text-slate-200 focus:outline-none focus:border-indigo-500"
                 >
                   {FONT_OPTIONS.map((f) => (
@@ -329,7 +391,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     <input
                       type="checkbox"
                       checked={selectedBubble.style.autoFontSize}
-                      onChange={(e) => updateStyle({ autoFontSize: e.target.checked })}
+                      onChange={(e) => updateStyle({ autoFontSize: e.target.checked }, true)}
                       className="rounded accent-indigo-600"
                     />
                     <span>Tự động vừa ô</span>
@@ -343,6 +405,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                       max="48"
                       value={selectedBubble.style.fontSize}
                       onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
                       className="flex-1 accent-indigo-500"
                     />
                     <span className="text-xs font-mono w-8 text-right text-slate-200">
@@ -356,7 +420,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
               <div className="flex items-center justify-between pt-1 border-t border-slate-800/40">
                 <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
                   <button
-                    onClick={() => updateStyle({ textAlign: 'left' })}
+                    onClick={() => updateStyle({ textAlign: 'left' }, true)}
                     className={`p-1 rounded ${
                       selectedBubble.style.textAlign === 'left' ? 'bg-indigo-600 text-white' : 'text-slate-400'
                     }`}
@@ -364,7 +428,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     <AlignLeft className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={() => updateStyle({ textAlign: 'center' })}
+                    onClick={() => updateStyle({ textAlign: 'center' }, true)}
                     className={`p-1 rounded ${
                       selectedBubble.style.textAlign === 'center' ? 'bg-indigo-600 text-white' : 'text-slate-400'
                     }`}
@@ -372,7 +436,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     <AlignCenter className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={() => updateStyle({ textAlign: 'right' })}
+                    onClick={() => updateStyle({ textAlign: 'right' }, true)}
                     className={`p-1 rounded ${
                       selectedBubble.style.textAlign === 'right' ? 'bg-indigo-600 text-white' : 'text-slate-400'
                     }`}
@@ -383,7 +447,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
 
                 <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
                   <button
-                    onClick={() => updateStyle({ isBold: !selectedBubble.style.isBold })}
+                    onClick={() => updateStyle({ isBold: !selectedBubble.style.isBold }, true)}
                     className={`p-1 rounded ${
                       selectedBubble.style.isBold ? 'bg-indigo-600 text-white' : 'text-slate-400'
                     }`}
@@ -391,7 +455,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     <Bold className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={() => updateStyle({ isItalic: !selectedBubble.style.isItalic })}
+                    onClick={() => updateStyle({ isItalic: !selectedBubble.style.isItalic }, true)}
                     className={`p-1 rounded ${
                       selectedBubble.style.isItalic ? 'bg-indigo-600 text-white' : 'text-slate-400'
                     }`}
@@ -410,6 +474,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                       type="color"
                       value={selectedBubble.style.color || '#000000'}
                       onChange={(e) => updateStyle({ color: e.target.value })}
+                      onBlur={flushHistoryCommit}
                       className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
                     />
                     <span className="text-[10px] font-mono">{selectedBubble.style.color}</span>
@@ -423,6 +488,7 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                       type="color"
                       value={selectedBubble.style.strokeColor || '#ffffff'}
                       onChange={(e) => updateStyle({ strokeColor: e.target.value })}
+                      onBlur={flushHistoryCommit}
                       className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
                     />
                     <span className="text-[10px] font-mono">{selectedBubble.style.strokeColor}</span>
@@ -442,6 +508,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                   max="10"
                   value={selectedBubble.style.strokeWidth}
                   onChange={(e) => updateStyle({ strokeWidth: Number(e.target.value) })}
+                  onMouseUp={flushHistoryCommit}
+                  onTouchEnd={flushHistoryCommit}
                   className="w-full accent-indigo-500"
                 />
               </div>

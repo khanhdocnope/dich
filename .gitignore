@@ -34,3 +34,6 @@ big-lama.pt
 Thumbs.db
 *.mp4
 *.webm
+__pycache__/
+*.pyc
+.vscode/

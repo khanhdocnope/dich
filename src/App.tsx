@@ -13,7 +13,8 @@ import { BubbleInspector } from './components/BubbleInspector';
 import { ColabModal } from './components/ColabModal';
 import { BatchProcessorModal } from './components/BatchProcessorModal';
 import { OutputFolderModal } from './components/OutputFolderModal';
-import { PageItem, Bubble, ColabConfig, EngineMode, OutputFolderConfig } from './types';
+import { ToastContainer } from './components/Toast';
+import { PageItem, Bubble, ColabConfig, EngineMode, OutputFolderConfig, ToastMessage } from './types';
 import { 
   fetchImageList, 
   saveOutputImage, 
@@ -23,9 +24,10 @@ import {
   clearAllStoredImages,
   importImagesFromFolderOrFiles
 } from './services/api';
-import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL } from './services/storage';
+import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL, revokePageObjectUrls } from './services/storage';
 import { inpaintImageWithLaMa, translateBubbles, cleanPageWithAI } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
+import { triggerSelectionHaptic } from './services/haptics';
 
 export const App: React.FC = () => {
   // Application Data States
@@ -45,6 +47,28 @@ export const App: React.FC = () => {
   // Mobile Drawer States
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [isMobileInspectorOpen, setIsMobileInspectorOpen] = useState<boolean>(false);
+
+  // Toast Notification System
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const showToast = useCallback(
+    (type: ToastMessage['type'], message: string, title?: string, duration = 4000) => {
+      const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const newToast: ToastMessage = { id, type, title, message, duration };
+      setToasts((prev) => [...prev, newToast]);
+
+      if (duration > 0) {
+        setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== id));
+        }, duration);
+      }
+    },
+    []
+  );
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Modals
   const [isColabModalOpen, setIsColabModalOpen] = useState<boolean>(false);
@@ -109,16 +133,26 @@ export const App: React.FC = () => {
     loadImages();
   }, [loadImages]);
 
-  // History Management for Undo / Redo (RAM Optimized with Blob URLs & Max Cap)
+  // Helper: Deep clone bubbles to guarantee immutable history snapshots
+  const cloneBubbles = useCallback((list: Bubble[]): Bubble[] => {
+    return list.map((b) => ({
+      ...b,
+      style: { ...b.style },
+    }));
+  }, []);
+
+  // History Management for Undo / Redo (RAM Optimized with Blob URLs & Max 30 Steps Cap)
   const [history, setHistory] = useState<Array<{ cleanedImageBase64: string | null; bubbles: Bubble[] }>>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
-  const MAX_HISTORY_STEPS = 20;
+  const MAX_HISTORY_STEPS = 30;
 
   const pushHistory = useCallback((newCleaned: string | null, newBubbles: Bubble[]) => {
     const safeCleaned = newCleaned ? createSafeObjectURL(newCleaned) : null;
+    const clonedBubbles = cloneBubbles(newBubbles);
+
     setHistory((prev) => {
       const updated = prev.slice(0, historyIndex + 1);
-      const nextList = [...updated, { cleanedImageBase64: safeCleaned, bubbles: newBubbles }];
+      const nextList = [...updated, { cleanedImageBase64: safeCleaned, bubbles: clonedBubbles }];
       if (nextList.length > MAX_HISTORY_STEPS) {
         const removed = nextList.shift();
         if (removed?.cleanedImageBase64 && removed.cleanedImageBase64.startsWith('blob:')) {
@@ -129,7 +163,7 @@ export const App: React.FC = () => {
       return nextList;
     });
     setHistoryIndex((prev) => Math.min(prev + 1, MAX_HISTORY_STEPS - 1));
-  }, [historyIndex]);
+  }, [cloneBubbles, historyIndex]);
 
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
@@ -137,12 +171,12 @@ export const App: React.FC = () => {
       const target = history[nextIdx];
       setHistoryIndex(nextIdx);
       setCleanedImageBase64(target.cleanedImageBase64);
-      setBubbles(target.bubbles);
+      setBubbles(cloneBubbles(target.bubbles));
       if (selectedFilename) {
         saveProjectMetadata(selectedFilename, target.bubbles, target.cleanedImageBase64 || undefined);
       }
     }
-  }, [history, historyIndex, selectedFilename]);
+  }, [cloneBubbles, history, historyIndex, selectedFilename]);
 
   const handleRedo = useCallback(() => {
     if (historyIndex < history.length - 1) {
@@ -150,12 +184,92 @@ export const App: React.FC = () => {
       const target = history[nextIdx];
       setHistoryIndex(nextIdx);
       setCleanedImageBase64(target.cleanedImageBase64);
-      setBubbles(target.bubbles);
+      setBubbles(cloneBubbles(target.bubbles));
       if (selectedFilename) {
         saveProjectMetadata(selectedFilename, target.bubbles, target.cleanedImageBase64 || undefined);
       }
     }
-  }, [history, historyIndex, selectedFilename]);
+  }, [cloneBubbles, history, historyIndex, selectedFilename]);
+
+  const handleCommitHistory = useCallback((customBubbles?: Bubble[]) => {
+    const target = customBubbles || bubbles;
+    pushHistory(cleanedImageBase64, target);
+    if (selectedFilename) {
+      saveProjectMetadata(selectedFilename, target, cleanedImageBase64 || undefined);
+    }
+  }, [bubbles, cleanedImageBase64, pushHistory, selectedFilename]);
+
+  const handleAddBubbleAction = useCallback((newB: Bubble) => {
+    setBubbles((prev) => {
+      const next = [...prev, newB];
+      pushHistory(cleanedImageBase64, next);
+      if (selectedFilename) {
+        saveProjectMetadata(selectedFilename, next, cleanedImageBase64 || undefined);
+      }
+      return next;
+    });
+    setSelectedBubbleId(newB.id);
+  }, [cleanedImageBase64, pushHistory, selectedFilename]);
+
+  const handleDeleteBubbleAction = useCallback((id: string) => {
+    setBubbles((prev) => {
+      const next = prev.filter((b) => b.id !== id);
+      pushHistory(cleanedImageBase64, next);
+      if (selectedFilename) {
+        saveProjectMetadata(selectedFilename, next, cleanedImageBase64 || undefined);
+      }
+      return next;
+    });
+    setSelectedBubbleId((prev) => (prev === id ? null : prev));
+  }, [cleanedImageBase64, pushHistory, selectedFilename]);
+
+  const handleUpdateBubbleAction = useCallback((updated: Bubble, commitToHistory: boolean = false) => {
+    setBubbles((prev) => {
+      const next = prev.map((b) => (b.id === updated.id ? updated : b));
+      if (commitToHistory) {
+        pushHistory(cleanedImageBase64, next);
+        if (selectedFilename) {
+          saveProjectMetadata(selectedFilename, next, cleanedImageBase64 || undefined);
+        }
+      }
+      return next;
+    });
+  }, [cleanedImageBase64, pushHistory, selectedFilename]);
+
+  // Global Keyboard Shortcuts for Undo (Ctrl+Z) & Redo (Ctrl+Y, Ctrl+Shift+Z)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+      if (!isCtrlOrCmd) return;
+
+      const activeEl = document.activeElement;
+      const isTextInput =
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable);
+
+      if (e.key === 'z' || e.key === 'Z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          if (!isTextInput) {
+            e.preventDefault();
+            handleUndo();
+          }
+        }
+      } else if (e.key === 'y' || e.key === 'Y') {
+        if (!isTextInput) {
+          e.preventDefault();
+          handleRedo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [handleUndo, handleRedo]);
 
   const handleResetCleaned = useCallback(() => {
     if (window.confirm('Khôi phục lại tranh gốc ban đầu (xóa bỏ toàn bộ phần đã inpaint/xóa chữ)?')) {
@@ -223,42 +337,67 @@ export const App: React.FC = () => {
         if (!selectedFilename) {
           setSelectedFilename(newItems[0].filename);
         }
+        showToast(
+          'success',
+          `Đã nạp thành công ${newItems.length} trang truyện với thumbnail tối ưu RAM.`,
+          'Nhập Ảnh Thành Công'
+        );
+      } else {
+        showToast('warning', 'Không tìm thấy file ảnh hợp lệ để nhập.', 'Thông Báo');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error importing images / folder:', err);
-      alert('Không thể nhập ảnh hoặc thư mục. Vui lòng thử lại.');
+      showToast('error', err?.message || 'Không thể nạp ảnh. Vui lòng kiểm tra định dạng file.', 'Lỗi Nhập Ảnh');
     } finally {
       setIsLoadingImages(false);
     }
   };
 
-  // Delete single image
+  // Delete single image and revoke its Object URLs to immediately free RAM
   const handleDeleteImage = async (filename: string) => {
-    await deleteStoredImage(filename);
-    const remaining = images.filter((img) => img.filename !== filename);
-    setImages(remaining);
-
-    if (selectedFilename === filename) {
-      if (remaining.length > 0) {
-        setSelectedFilename(remaining[0].filename);
-      } else {
-        setSelectedFilename(null);
-        setBubbles([]);
-        setSelectedBubbleId(null);
-        setCleanedImageBase64(null);
+    try {
+      const target = images.find((img) => img.filename === filename);
+      if (target) {
+        revokePageObjectUrls(target);
       }
+
+      await deleteStoredImage(filename);
+      const remaining = images.filter((img) => img.filename !== filename);
+      setImages(remaining);
+
+      if (selectedFilename === filename) {
+        if (remaining.length > 0) {
+          setSelectedFilename(remaining[0].filename);
+        } else {
+          setSelectedFilename(null);
+          setBubbles([]);
+          setSelectedBubbleId(null);
+          setCleanedImageBase64(null);
+        }
+      }
+      showToast('info', `Đã xóa trang "${filename}" và giải phóng bộ nhớ.`);
+    } catch (err: any) {
+      console.error('Delete image error:', err);
+      showToast('error', 'Lỗi khi xóa trang ảnh.', 'Lỗi');
     }
   };
 
-  // Clear all images
+  // Clear all images and revoke all Object URLs
   const handleClearAllImages = async () => {
-    await clearAllStoredImages();
-    setImages([]);
-    setSelectedFilename(null);
-    setCurrentFolderName('');
-    setBubbles([]);
-    setSelectedBubbleId(null);
-    setCleanedImageBase64(null);
+    try {
+      images.forEach((img) => revokePageObjectUrls(img));
+      await clearAllStoredImages();
+      setImages([]);
+      setSelectedFilename(null);
+      setCurrentFolderName('');
+      setBubbles([]);
+      setSelectedBubbleId(null);
+      setCleanedImageBase64(null);
+      showToast('info', 'Đã dọn dẹp toàn bộ trang và giải phóng bộ nhớ RAM.', 'Dọn Dẹp Thành Công');
+    } catch (err: any) {
+      console.error('Clear all images error:', err);
+      showToast('error', 'Lỗi khi xóa danh sách ảnh.', 'Lỗi');
+    }
   };
 
   const currentImage = images.find((img) => img.filename === selectedFilename) || null;
@@ -288,9 +427,12 @@ export const App: React.FC = () => {
 
         resolve(canvas.toDataURL('image/png'));
       };
-      img.onerror = () => resolve(null);
+      img.onerror = () => {
+        showToast('error', `Không thể giải mã ảnh "${currentImage.filename}" để xuất.`, 'Lỗi Đọc Ảnh');
+        resolve(null);
+      };
     });
-  }, [currentImage, cleanedImageBase64, bubbles]);
+  }, [currentImage, cleanedImageBase64, bubbles, showToast]);
 
   // Export current page to device gallery / downloads & chosen folder
   const handleExportCurrent = async () => {
@@ -309,9 +451,9 @@ export const App: React.FC = () => {
           img.filename === selectedFilename ? { ...img, status: 'done', outputUrl: base64 } : img
         )
       );
-      alert(`🎉 Đã xuất thành công "${selectedFilename}"!\n📂 Vị trí: ${result.savedPath || targetFolder}`);
+      showToast('success', `Đã xuất "${selectedFilename}" vào ${result.savedPath || targetFolder}`, 'Xuất Ảnh Hoàn Tất');
     } else {
-      alert(`⚠️ Không thể lưu trang "${selectedFilename}". Vui lòng thử lại.`);
+      showToast('error', `Không thể lưu trang "${selectedFilename}". Vui lòng thử lại.`, 'Lỗi Xuất Ảnh');
     }
   };
 
@@ -474,17 +616,10 @@ export const App: React.FC = () => {
           bubbles={bubbles}
           selectedBubbleId={selectedBubbleId}
           onSelectBubble={setSelectedBubbleId}
-          onUpdateBubble={(updated) =>
-            setBubbles((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
-          }
-          onAddBubble={(newB) => {
-            setBubbles((prev) => [...prev, newB]);
-            setSelectedBubbleId(newB.id);
-          }}
-          onDeleteBubble={(id) => {
-            setBubbles((prev) => prev.filter((b) => b.id !== id));
-            if (selectedBubbleId === id) setSelectedBubbleId(null);
-          }}
+          onUpdateBubble={handleUpdateBubbleAction}
+          onAddBubble={handleAddBubbleAction}
+          onDeleteBubble={handleDeleteBubbleAction}
+          onCommitHistory={handleCommitHistory}
           onManualInpaintArea={handleManualInpaintArea}
           onAutoCleanPage={handleAutoCleanPage}
           isCleaningPage={isCleaningPage}
@@ -503,13 +638,9 @@ export const App: React.FC = () => {
           bubbles={bubbles}
           selectedBubbleId={selectedBubbleId}
           onSelectBubble={setSelectedBubbleId}
-          onUpdateBubble={(updated) =>
-            setBubbles((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
-          }
-          onDeleteBubble={(id) => {
-            setBubbles((prev) => prev.filter((b) => b.id !== id));
-            if (selectedBubbleId === id) setSelectedBubbleId(null);
-          }}
+          onUpdateBubble={handleUpdateBubbleAction}
+          onDeleteBubble={handleDeleteBubbleAction}
+          onCommitHistory={handleCommitHistory}
           onAddBubble={() => {
             const newB: Bubble = {
               id: `bubble_${Date.now()}`,
@@ -522,15 +653,13 @@ export const App: React.FC = () => {
               style: { ...defaultTextStyle },
               isInpainted: false,
             };
-            setBubbles((prev) => [...prev, newB]);
-            setSelectedBubbleId(newB.id);
+            handleAddBubbleAction(newB);
           }}
           onReTranslateBubble={async (bubble) => {
             const res = await translateBubbles(colabConfig, [bubble]);
             if (res.length > 0) {
-              setBubbles((prev) =>
-                prev.map((b) => (b.id === bubble.id ? { ...b, translatedText: res[0].translatedText } : b))
-              );
+              const updatedBubble = { ...bubble, translatedText: res[0].translatedText };
+              handleUpdateBubbleAction(updatedBubble, true);
             }
           }}
           isOpenMobile={isMobileInspectorOpen}
@@ -542,6 +671,7 @@ export const App: React.FC = () => {
       <nav className="mobile-bottom-nav">
         <button
           onClick={() => {
+            triggerSelectionHaptic();
             setIsMobileSidebarOpen((prev) => !prev);
             setIsMobileInspectorOpen(false);
           }}
@@ -552,32 +682,38 @@ export const App: React.FC = () => {
         </button>
 
         <button
-          onClick={handleExportCurrent}
-          disabled={!selectedFilename || isProcessing}
-          className="mobile-nav-btn primary"
+          onClick={() => {
+            triggerSelectionHaptic();
+            setIsColabModalOpen(true);
+          }}
+          className="mobile-nav-btn"
         >
-          <Download className="w-4 h-4 text-white" />
-          <span>{isProcessing ? 'Đang xuất...' : 'Xuất Ảnh'}</span>
+          <Sparkles className={`w-4 h-4 ${colabConfig.connected ? 'text-emerald-400' : 'text-amber-400'}`} />
+          <span>{colabConfig.connected ? 'AI Sẵn Sàng' : 'Kết Nối AI'}</span>
         </button>
 
         <button
           onClick={() => {
+            triggerSelectionHaptic();
             setIsMobileInspectorOpen((prev) => !prev);
             setIsMobileSidebarOpen(false);
           }}
           className={`mobile-nav-btn ${isMobileInspectorOpen ? 'active' : ''}`}
         >
-          <Type className="w-4 h-4 text-emerald-400" />
-          <span>Công Cụ ({bubbles.length})</span>
+          <Type className="w-4 h-4 text-purple-400" />
+          <span>Ô Thoại ({bubbles.length})</span>
         </button>
 
         <button
-          onClick={handleExportCurrent}
-          disabled={!selectedFilename}
-          className="mobile-nav-btn"
+          onClick={() => {
+            triggerSelectionHaptic();
+            handleExportCurrent();
+          }}
+          disabled={!selectedFilename || isProcessing}
+          className="mobile-nav-btn primary"
         >
-          <Download className="w-4 h-4 text-slate-300" />
-          <span>Xuất Ảnh</span>
+          <Download className="w-4 h-4 text-white" />
+          <span>{isProcessing ? 'Đang xuất...' : 'Xuất Ảnh'}</span>
         </button>
       </nav>
 
@@ -609,6 +745,9 @@ export const App: React.FC = () => {
         outputConfig={outputConfig}
         onSaveConfig={handleSaveOutputConfig}
       />
+
+      {/* Global Toast Notification Container */}
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };

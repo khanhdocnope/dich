@@ -46,10 +46,21 @@ export interface PageItem {
   filename: string;
   rawUrl: string;
   rawBlob?: Blob;
+  thumbnailUrl?: string | null;
+  thumbnailBlob?: Blob;
   outputUrl: string | null;
   outputBlob?: Blob;
   status: 'raw' | 'in_progress' | 'done';
   metadata?: PageMetadata | null;
+  loadError?: boolean;
+}
+
+export interface ToastMessage {
+  id: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  title?: string;
+  message: string;
+  duration?: number;
 }
 
 export type EngineMode = 'gemini' | 'uncensored' | 'mock';
