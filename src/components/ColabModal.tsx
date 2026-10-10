@@ -88,10 +88,10 @@ export const ColabModal: React.FC<ColabModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-100">
-                Kết Nối Google Colab AI GPU (LaMa Inpainting)
+                Kết Nối AI Cloud (Hugging Face ZeroGPU / Google Colab)
               </h3>
               <p className="text-xs text-slate-400">
-                Xử lý xóa nền chữ sạch hoàn hảo và OCR tiếng Nhật/Trung không bị kiểm duyệt
+                Xóa chữ sạch hoàn hảo bằng mô hình LaMa Inpainting trên Nvidia A100 / T4 GPU
               </p>
             </div>
           </div>
@@ -105,40 +105,38 @@ export const ColabModal: React.FC<ColabModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-5 space-y-4 overflow-y-auto">
-          {/* Colab Instructions Guide */}
-          <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-800/40 text-xs space-y-2 text-indigo-200">
+          {/* Instructions Guide */}
+          <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-800/40 text-xs space-y-2.5 text-indigo-200">
             <div className="font-semibold text-indigo-300 flex items-center space-x-1.5">
               <Sparkles className="w-4 h-4 text-indigo-400" />
-              <span>Cách chạy Google Colab (Miễn phí 100%):</span>
+              <span>Hai phương thức chạy AI Cloud miễn phí:</span>
             </div>
-            <ol className="list-decimal list-inside space-y-1 text-slate-300 pl-1 text-[11.5px] leading-relaxed">
-              <li>
-                Mở notebook tại thư mục dự án: <code className="text-indigo-300 font-mono">colab/Manga_Translator_LaMa_Colab.ipynb</code> và tải lên Google Colab.
-              </li>
-              <li>
-                Chọn GPU (Menu <strong>Runtime &gt; Change runtime type &gt; T4 GPU</strong>).
-              </li>
-              <li>
-                Bấm <strong>Runtime &gt; Run all</strong>.
-              </li>
-              <li>
-                Copy link <code className="text-indigo-300 font-mono">https://xxxx.ngrok-free.app</code> xuất hiện ở cuối và dán vào ô bên dưới.
-              </li>
-            </ol>
+
+            <div className="space-y-2 text-slate-300 text-[11.5px] leading-relaxed">
+              <div className="p-2 rounded-lg bg-indigo-900/30 border border-indigo-700/40">
+                <strong className="text-indigo-300 block mb-0.5">🌟 Cách 1: Hugging Face Spaces (ZeroGPU A100 - Khuyên dùng)</strong>
+                Deploy mã nguồn từ thư mục <code className="text-indigo-200 font-mono">hf_space/</code> lên Hugging Face Space (chọn ZeroGPU). Copy URL dạng <code className="text-indigo-300 font-mono">https://username-space.hf.space</code> dán vào bên dưới. Chạy 24/7 ổn định!
+              </div>
+
+              <div className="p-2 rounded-lg bg-slate-900/40 border border-slate-800">
+                <strong className="text-slate-200 block mb-0.5">⚡ Cách 2: Google Colab (T4 GPU)</strong>
+                Mở file <code className="text-indigo-300 font-mono">colab/Manga_Translator_LaMa_Colab.ipynb</code> trên Colab, chọn Runtime GPU và bấm Run all. Copy link <code className="text-indigo-300 font-mono">https://xxxx.ngrok-free.app</code> dán vào bên dưới.
+              </div>
+            </div>
           </div>
 
-          {/* Colab URL Input */}
+          {/* AI Server URL Input */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-300 flex items-center space-x-1.5">
               <Server className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Đường dẫn Colab Server URL (ngrok):</span>
+              <span>Đường dẫn AI Server URL (Hugging Face Space hoặc ngrok):</span>
             </label>
             <div className="flex space-x-2">
               <input
                 type="text"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="https://1234-xx-xx.ngrok-free.app"
+                placeholder="https://user-space.hf.space hoặc https://xxxx.ngrok-free.app"
                 className="flex-1 bg-slate-950 border border-slate-800 text-xs rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
               />
               <button

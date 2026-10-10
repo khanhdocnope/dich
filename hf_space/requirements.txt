@@ -1,0 +1,27 @@
+# ==============================================================================
+# Manga Text Cleaner (AI Inpainting Web App & REST API)
+# Hugging Face Spaces (ZeroGPU Nvidia A100) Requirements
+# ==============================================================================
+
+# Hugging Face ZeroGPU SDK
+spaces>=0.30.0
+
+# UI & Web Framework
+gradio>=5.10.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pydantic>=2.9.0
+python-multipart>=0.0.12
+
+# Deep Learning & Torch (Pre-installed on HF ZeroGPU containers, specified for compatibility)
+torch>=2.2.0
+torchvision>=0.17.0
+
+# Computer Vision & Image Processing
+numpy>=1.26.0,<2.0.0
+Pillow>=10.4.0
+opencv-python-headless>=4.10.0.84
+
+# Networking & Utilities
+requests>=2.32.0
+aiofiles>=24.1.0
