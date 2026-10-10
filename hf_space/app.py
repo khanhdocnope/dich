@@ -364,7 +364,7 @@ class ComicTextDetectorEngine:
             except Exception as e:
                 print(f"⚠️ ComicTextDetector init notice: {e}")
 
-    def detect_mask(self, img_bgr: np.ndarray, input_size: int = 1024) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    def detect_mask(self, img_bgr: np.ndarray, input_size: int = 1024, det_threshold: float = 0.20) -> Tuple[np.ndarray, List[Dict[str, int]]]:
         h, w = img_bgr.shape[:2]
         full_mask = np.zeros((h, w), dtype=np.uint8)
         boxes = []
@@ -412,7 +412,7 @@ class ComicTextDetectorEngine:
 
                 mask_res = cv2.resize(comb_prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
                 # Sensitive threshold to capture colored, stylized, and Japanese manga text
-                binary = (mask_res > 0.20).astype(np.uint8) * 255
+                binary = (mask_res > det_threshold).astype(np.uint8) * 255
                 full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
             except Exception as e:
                 print(f"Detection chunk error at y={y}: {e}")
@@ -440,9 +440,10 @@ class MangaCleanerPipeline:
     def clean_image(
         self,
         img_pil: Image.Image,
-        dilation_px: int = 4,
+        dilation_px: int = 8,
         custom_mask: Optional[Image.Image] = None,
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        det_threshold: float = 0.20
     ) -> Tuple[Image.Image, Image.Image, Dict[str, Any]]:
         if model_name:
             self.iopaint.load_model(model_name)
@@ -466,14 +467,14 @@ class MangaCleanerPipeline:
                 raw_mask = (mask_arr > 20).astype(np.uint8) * 255
                 is_custom = True
             else:
-                raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+                raw_mask, boxes = self.detector.detect_mask(img_bgr_arr, det_threshold=det_threshold)
                 boxes_count = len(boxes)
         else:
-            raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+            raw_mask, boxes = self.detector.detect_mask(img_bgr_arr, det_threshold=det_threshold)
             boxes_count = len(boxes)
 
         # 2. Morphological Elliptical Dilation (eliminates anti-aliasing text stroke fringes)
-        ksize = max(3, dilation_px * 2 + 1)
+        ksize = max(3, int(dilation_px) * 2 + 1)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
         dilated_mask = cv2.dilate(raw_mask, kernel)
 
@@ -489,6 +490,8 @@ class MangaCleanerPipeline:
         stats = {
             "model": self.iopaint.current_model_name,
             "engine": f"IOPaint ({'ZeroGPU' if HAS_ZEROGPU else 'CPU'})",
+            "dilation_px": int(dilation_px),
+            "det_threshold": float(det_threshold),
             "total_regions": 1 if is_custom else boxes_count,
             "mode": "custom_brush" if is_custom else "auto",
             "width": w,
@@ -553,8 +556,9 @@ api_router = APIRouter()
 class CleanPagePayload(BaseModel):
     imageBase64: str
     maskBase64: Optional[str] = None
-    dilationPx: Optional[int] = 4
+    dilationPx: Optional[int] = 8
     modelName: Optional[str] = None
+    detThreshold: Optional[float] = 0.20
 
 class InpaintPayload(BaseModel):
     imageBase64: str
@@ -587,12 +591,15 @@ async def api_clean_page(req: CleanPagePayload):
     try:
         img = b64_to_pil(req.imageBase64)
         custom_mask = b64_to_pil(req.maskBase64).convert("L") if req.maskBase64 else None
+        dilation_val = req.dilationPx if req.dilationPx is not None else 8
+        thresh_val = req.detThreshold if req.detThreshold is not None else 0.20
         cleaned_pil, mask_pil, stats = await run_in_threadpool(
             cleaner_pipeline.clean_image,
             img_pil=img,
-            dilation_px=req.dilationPx or 4,
+            dilation_px=dilation_val,
             custom_mask=custom_mask,
-            model_name=req.modelName
+            model_name=req.modelName,
+            det_threshold=thresh_val
         )
         return {
             "success": True,
@@ -726,7 +733,7 @@ def create_gradio_ui() -> gr.Blocks:
                                 value="anime-lama",
                                 label="Mô hình AI"
                             )
-                            dilation_slider_tab1 = gr.Slider(0, 15, value=4, step=1, label="Độ mở rộng viền nét vẽ (px)")
+                            dilation_slider_tab1 = gr.Slider(0, 50, value=6, step=1, label="Độ mở rộng viền nét vẽ (Dilation px)")
                         btn_inpaint = gr.Button("🚀 AI Xóa Nền Vùng Chọn (ZeroGPU)", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=6):
@@ -755,13 +762,14 @@ def create_gradio_ui() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column(scale=6):
                         auto_input_image = gr.Image(type="pil", label="Tải ảnh gốc Manga / Manhwa", elem_classes="mobile-canvas-container")
-                        with gr.Accordion("⚙️ Tùy chọn", open=False):
+                        with gr.Accordion("⚙️ Tùy chọn nâng cao", open=True):
                             model_choice_tab2 = gr.Radio(
                                 choices=[("Anime-Manga Big-LaMa", "anime-lama"), ("Standard Big-LaMa", "lama")],
                                 value="anime-lama",
                                 label="Mô hình AI"
                             )
-                            dilation_slider_tab2 = gr.Slider(0, 12, value=4, step=1, label="Độ mở rộng viền ký tự (Dilation)")
+                            dilation_slider_tab2 = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px - tăng cao để xóa sạch viền/bóng chữ)")
+                            det_threshold_slider_tab2 = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold - càng nhỏ càng bắt trọn chữ SFX/chữ mờ)")
                         btn_auto_clean = gr.Button("🪄 Tự Động Quét & Xóa Toàn Bộ (AI Auto-Clean)", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=6):
@@ -769,20 +777,21 @@ def create_gradio_ui() -> gr.Blocks:
                         auto_output_mask = gr.Image(label="Mask ComicTextDetector", type="pil", interactive=False)
                         auto_output_stats = gr.JSON(label="Thống kê kết quả")
 
-                def on_run_auto_clean(img_pil, model_name, dilation_val):
+                def on_run_auto_clean(img_pil, model_name, dilation_val, det_thresh_val):
                     if img_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
                     result_pil, mask_res_pil, stats = cleaner_pipeline.clean_image(
                         img_pil=img_pil,
                         dilation_px=int(dilation_val),
                         custom_mask=None,
-                        model_name=model_name
+                        model_name=model_name,
+                        det_threshold=float(det_thresh_val)
                     )
                     return result_pil, mask_res_pil, stats
 
                 btn_auto_clean.click(
                     fn=on_run_auto_clean,
-                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2],
+                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2, det_threshold_slider_tab2],
                     outputs=[auto_output_cleaned, auto_output_mask, auto_output_stats]
                 )
 
