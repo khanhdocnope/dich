@@ -167,89 +167,87 @@ class HDStrategy(str, Enum):
 # --------------------------------------------------------------------------------------
 # 4. IOPaint Inpainting Engine with ZeroGPU Support
 # --------------------------------------------------------------------------------------
+# Global TorchScript model cache (Host CPU RAM)
+_LAMA_CPU_CACHE: Dict[str, Any] = {}
+
+def get_lama_model(model_name: str = "anime-lama"):
+    """
+    Retrieves or loads the TorchScript model into Host CPU RAM.
+    Caches it in module memory so subsequent calls in the worker process are instant.
+    """
+    global _LAMA_CPU_CACHE
+    canonical_name = "anime-lama" if "anime" in model_name.lower() else "lama"
+    if canonical_name in _LAMA_CPU_CACHE and _LAMA_CPU_CACHE[canonical_name] is not None:
+        return _LAMA_CPU_CACHE[canonical_name]
+
+    target_path = ANIME_LAMA_PT_PATH if canonical_name == "anime-lama" else BIG_LAMA_PT_PATH
+    if not os.path.exists(target_path) or os.path.getsize(target_path) < 10000000:
+        alt_path = BIG_LAMA_PT_PATH if canonical_name == "anime-lama" else ANIME_LAMA_PT_PATH
+        if os.path.exists(alt_path) and os.path.getsize(alt_path) > 10000000:
+            target_path = alt_path
+
+    if not os.path.exists(target_path) or os.path.getsize(target_path) < 10000000:
+        raise RuntimeError(f"Model file not found or corrupted: {target_path}")
+
+    print(f"📦 Loading {canonical_name} into CPU RAM ({os.path.basename(target_path)})...")
+    loaded = torch.jit.load(target_path, map_location="cpu")
+    loaded.eval()
+    _LAMA_CPU_CACHE[canonical_name] = loaded
+    return loaded
+
+@spaces.GPU(duration=60)
+def zero_gpu_lama_forward(pad_image_rgb: np.ndarray, pad_mask: np.ndarray, model_name: str = "anime-lama") -> np.ndarray:
+    """
+    Standalone function decorated with @spaces.GPU for ZeroGPU Nvidia A100.
+    CRITICAL: Must ONLY receive picklable types (np.ndarray, str). Never pass `self` or `torch.jit.ScriptModule`!
+    """
+    canonical_name = "anime-lama" if "anime" in model_name.lower() else "lama"
+    model = get_lama_model(canonical_name)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    gpu_model = model.to(dev)
+
+    try:
+        img_norm = norm_img(pad_image_rgb)
+        mask_norm = norm_img(pad_mask)
+        mask_norm = (mask_norm > 0).astype(np.float32)
+
+        img_t = torch.from_numpy(img_norm).unsqueeze(0).to(dev, dtype=torch.float32)
+        mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(dev, dtype=torch.float32)
+
+        with torch.inference_mode():
+            out = gpu_model(img_t, mask_t)
+
+        cur_res = out[0].permute(1, 2, 0).detach().cpu().numpy()
+        cur_res = np.clip(cur_res * 255.0, 0, 255).astype(np.uint8)
+        cur_res = cv2.cvtColor(cur_res, cv2.COLOR_RGB2BGR)
+        return cur_res
+    finally:
+        gpu_model.to("cpu")
+        if dev == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
+
 class IOPaintEngine:
     def __init__(self, default_model: str = "anime-lama"):
         self.pad_mod = 8
         self.current_model_name = default_model
-        self.model = None
         self.ready = False
-        self.loaded_models: Dict[str, Any] = {}
         self.load_model(default_model)
 
     def load_model(self, model_name: str) -> bool:
         """Loads or switches active IOPaint model (anime-lama or lama) in Host CPU RAM."""
         model_name = model_name.lower().strip()
-        if model_name in self.loaded_models:
-            self.model = self.loaded_models[model_name]
-            self.current_model_name = model_name
-            self.ready = True
-            print(f"🔄 Switched active IOPaint model to: {model_name}")
-            return True
-
-        target_path = None
-        if "anime" in model_name:
-            target_path = ANIME_LAMA_PT_PATH
-            canonical_name = "anime-lama"
-        else:
-            target_path = BIG_LAMA_PT_PATH
-            canonical_name = "lama"
-
-        if not os.path.exists(target_path) or os.path.getsize(target_path) < 10000000:
-            if target_path == ANIME_LAMA_PT_PATH and os.path.exists(BIG_LAMA_PT_PATH):
-                target_path = BIG_LAMA_PT_PATH
-                canonical_name = "lama"
-            elif target_path == BIG_LAMA_PT_PATH and os.path.exists(ANIME_LAMA_PT_PATH):
-                target_path = ANIME_LAMA_PT_PATH
-                canonical_name = "anime-lama"
-
-        if os.path.exists(target_path) and os.path.getsize(target_path) > 10000000:
-            try:
-                print(f"⏳ Loading IOPaint model into CPU RAM: {canonical_name} ({os.path.basename(target_path)})...")
-                loaded = torch.jit.load(target_path, map_location="cpu")
-                loaded.eval()
-                self.loaded_models[canonical_name] = loaded
-                self.model = loaded
-                self.current_model_name = canonical_name
-                self.ready = True
-                print(f"✅ IOPaint Model '{canonical_name}' ready in CPU RAM!")
-                return True
-            except Exception as e:
-                print(f"⚠️ Failed to load IOPaint model {target_path}: {e}")
-                self.ready = False
-                return False
-        return False
-
-    @spaces.GPU(duration=60)
-    def forward(self, pad_image_rgb: np.ndarray, pad_mask: np.ndarray) -> np.ndarray:
-        """
-        IOPaint forward pass wrapped in @spaces.GPU for ZeroGPU Nvidia A100.
-        pad_image_rgb: [H, W, 3] RGB uint8 (modulo-8 padded)
-        pad_mask: [H, W, 1] uint8 (0 or 255)
-        returns: [H, W, 3] BGR uint8
-        """
-        dev = "cuda" if torch.cuda.is_available() else "cpu"
-        gpu_model = self.model.to(dev)
-
+        canonical_name = "anime-lama" if "anime" in model_name else "lama"
         try:
-            img_norm = norm_img(pad_image_rgb)
-            mask_norm = norm_img(pad_mask)
-            mask_norm = (mask_norm > 0).astype(np.float32)
-
-            img_t = torch.from_numpy(img_norm).unsqueeze(0).to(dev, dtype=torch.float32)
-            mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(dev, dtype=torch.float32)
-
-            with torch.inference_mode():
-                out = gpu_model(img_t, mask_t)
-
-            cur_res = out[0].permute(1, 2, 0).detach().cpu().numpy()
-            cur_res = np.clip(cur_res * 255.0, 0, 255).astype(np.uint8)
-            cur_res = cv2.cvtColor(cur_res, cv2.COLOR_RGB2BGR)
-            return cur_res
-        finally:
-            gpu_model.to("cpu")
-            if dev == "cuda":
-                torch.cuda.empty_cache()
-            gc.collect()
+            get_lama_model(canonical_name)
+            self.current_model_name = canonical_name
+            self.ready = True
+            print(f"🔄 Switched active IOPaint model to: {canonical_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to load IOPaint model {model_name}: {e}")
+            self.ready = False
+            return False
 
     def _pad_forward(self, image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """
@@ -265,7 +263,8 @@ class IOPaintEngine:
         pad_image = pad_img_to_modulo(image_rgb, mod=self.pad_mod)
         pad_mask = pad_img_to_modulo(mask, mod=self.pad_mod)
 
-        result_bgr = self.forward(pad_image, pad_mask)
+        # Standalone function invocation with ONLY numpy arrays & string (Pickle-safe for ZeroGPU)
+        result_bgr = zero_gpu_lama_forward(pad_image, pad_mask, self.current_model_name)
         result_bgr = result_bgr[0:orig_h, 0:orig_w, :]
 
         # 1:1 Pixel-Perfect Mask Composite (Preserves untouched original pixels perfectly)
@@ -321,7 +320,7 @@ class IOPaintEngine:
         mask: [H, W] uint8 (0 or 255)
         returns: [H, W, 3] BGR uint8
         """
-        if not self.ready or self.model is None:
+        if not self.ready:
             orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
             return cv2.inpaint(orig_bgr, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
