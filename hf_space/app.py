@@ -27,6 +27,8 @@ Features:
 from __future__ import annotations
 
 import os
+# Disable Gradio 5 Node.js Server-Side Rendering (SSR) mode to prevent port 7860 conflicts
+os.environ["GRADIO_SSR_MODE"] = "False"
 import sys
 import io
 import time
@@ -782,13 +784,7 @@ CUSTOM_CSS = """
 """
 
 def create_gradio_ui() -> gr.Blocks:
-    theme = gr.themes.Soft(
-        primary_hue="indigo",
-        secondary_hue="purple",
-        neutral_hue="slate"
-    )
-
-    with gr.Blocks(title="Manga Text Cleaner - ZeroGPU A100", theme=theme) as demo:
+    with gr.Blocks(title="Manga Text Cleaner - ZeroGPU A100") as demo:
         gr.HTML(f"<style>{CUSTOM_CSS}</style>")
         with gr.Row(elem_classes="items-center justify-between"):
             with gr.Column(scale=8):
