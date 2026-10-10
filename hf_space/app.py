@@ -207,8 +207,10 @@ class ComicTextDetectorEngine:
 
         if not self.ready or self.net is None:
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
-            return thresh, []
+            _, bubble_mask = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
+            text_inside = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+            combined = cv2.bitwise_and(text_inside, bubble_mask)
+            return combined, []
 
         chunk_h = 1200
         overlap = 100
@@ -231,13 +233,31 @@ class ComicTextDetectorEngine:
                 outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
                 seg_prob = None
                 for out in outs:
-                    if len(out.shape) == 4 and out.shape[1] in [1, 2]:
-                        seg_prob = out[0, 0] if out.shape[1] == 1 else out[0, 1]
-                        break
+                    if len(out.shape) == 4:
+                        if out.shape[1] == 2:
+                            # 2-channel output: C0 is background, C1 is text
+                            c0 = out[0, 0]
+                            c1 = out[0, 1]
+                            exp_c0 = np.exp(np.clip(c0 - np.maximum(c0, c1), -15, 15))
+                            exp_c1 = np.exp(np.clip(c1 - np.maximum(c0, c1), -15, 15))
+                            seg_prob = exp_c1 / (exp_c0 + exp_c1 + 1e-6)
+                            break
+                        elif out.shape[1] == 1:
+                            raw = out[0, 0]
+                            if raw.min() < 0 or raw.max() > 1.0:
+                                prob = 1.0 / (1.0 + np.exp(-np.clip(raw, -15.0, 15.0)))
+                            else:
+                                prob = raw
+                            seg_prob = prob
+                            break
 
                 if seg_prob is not None:
+                    # Sanity check: Text should be minority (< 40% of patch area)
+                    if np.mean(seg_prob > 0.45) > 0.40:
+                        seg_prob = 1.0 - seg_prob
+
                     seg_map = cv2.resize(seg_prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
-                    sub_mask = (seg_map > 0.35).astype(np.uint8) * 255
+                    sub_mask = (seg_map > 0.40).astype(np.uint8) * 255
                     full_mask[y:y2] = np.maximum(full_mask[y:y2], sub_mask)
             except Exception as e:
                 print(f"DNN chunk inference notice: {e}")
@@ -246,13 +266,25 @@ class ComicTextDetectorEngine:
                 break
             y += (chunk_h - overlap)
 
+        # Global Sanity Check: Text in manga is NEVER more than 35% of total page area!
+        white_ratio = np.mean(full_mask > 0)
+        if white_ratio > 0.35:
+            print(f"⚠️ Mask was inverted ({white_ratio*100:.1f}% white). Inverting back to protect artwork!")
+            full_mask = ((full_mask == 0).astype(np.uint8)) * 255
+
+        # Filter contours: eliminate noise and impossible page-sized blobs
+        page_area = h * w
+        clean_mask = np.zeros_like(full_mask)
         contours, _ = cv2.findContours(full_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             bx, by, bw, bh = cv2.boundingRect(cnt)
-            if bw * bh >= 20:
+            area = bw * bh
+            # Discard tiny speckle noise (< 25px) and giant page-sized artifacts (> 25% of whole page)
+            if 25 <= area <= 0.25 * page_area:
+                cv2.drawContours(clean_mask, [cnt], -1, 255, -1)
                 boxes.append({"x": int(bx), "y": int(by), "w": int(bw), "h": int(bh)})
 
-        return full_mask, boxes
+        return clean_mask, boxes
 
 detector_engine = ComicTextDetectorEngine()
 
