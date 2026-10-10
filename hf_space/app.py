@@ -198,7 +198,28 @@ def get_lama_model(model_name: str = "anime-lama"):
     _LAMA_CPU_CACHE[canonical_name] = loaded
     return loaded
 
-@spaces.GPU(duration=60)
+def cpu_lama_forward(pad_image_rgb: np.ndarray, pad_mask: np.ndarray, model_name: str = "anime-lama") -> np.ndarray:
+    """CPU inference forward pass (Unlimited free compute, zero GPU quota consumed)."""
+    canonical_name = "anime-lama" if "anime" in model_name.lower() else "lama"
+    model = get_lama_model(canonical_name)
+    model.to("cpu")
+
+    img_norm = norm_img(pad_image_rgb)
+    mask_norm = norm_img(pad_mask)
+    mask_norm = (mask_norm > 0).astype(np.float32)
+
+    img_t = torch.from_numpy(img_norm).unsqueeze(0).to("cpu", dtype=torch.float32)
+    mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to("cpu", dtype=torch.float32)
+
+    with torch.inference_mode():
+        out = model(img_t, mask_t)
+
+    cur_res = out[0].permute(1, 2, 0).detach().cpu().numpy()
+    cur_res = np.clip(cur_res * 255.0, 0, 255).astype(np.uint8)
+    cur_res = cv2.cvtColor(cur_res, cv2.COLOR_RGB2BGR)
+    return cur_res
+
+@spaces.GPU(duration=12)
 def zero_gpu_lama_forward(pad_image_rgb: np.ndarray, pad_mask: np.ndarray, model_name: str = "anime-lama") -> np.ndarray:
     """
     Standalone function decorated with @spaces.GPU for ZeroGPU Nvidia A100.
@@ -252,7 +273,7 @@ class IOPaintEngine:
             self.ready = False
             return False
 
-    def _pad_forward(self, image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    def _pad_forward(self, image_rgb: np.ndarray, mask: np.ndarray, force_cpu: bool = False) -> np.ndarray:
         """
         Runs IOPaint forward pass with symmetric padding and 1:1 pixel-perfect compositing.
         image_rgb: [H, W, 3] RGB uint8
@@ -266,8 +287,15 @@ class IOPaintEngine:
         pad_image = pad_img_to_modulo(image_rgb, mod=self.pad_mod)
         pad_mask = pad_img_to_modulo(mask, mod=self.pad_mod)
 
-        # Standalone function invocation with ONLY numpy arrays & string (Pickle-safe for ZeroGPU)
-        result_bgr = zero_gpu_lama_forward(pad_image, pad_mask, self.current_model_name)
+        if force_cpu or not HAS_ZEROGPU:
+            result_bgr = cpu_lama_forward(pad_image, pad_mask, self.current_model_name)
+        else:
+            try:
+                result_bgr = zero_gpu_lama_forward(pad_image, pad_mask, self.current_model_name)
+            except Exception as e:
+                print(f"⚠️ ZeroGPU quota exceeded or error ({e}). Seamlessly falling back to CPU RAM...")
+                result_bgr = cpu_lama_forward(pad_image, pad_mask, self.current_model_name)
+
         result_bgr = result_bgr[0:orig_h, 0:orig_w, :]
 
         # 1:1 Pixel-Perfect Mask Composite (Preserves untouched original pixels perfectly)
@@ -313,7 +341,8 @@ class IOPaintEngine:
         mask: np.ndarray,
         hd_strategy: HDStrategy = HDStrategy.ORIGINAL,
         crop_trigger_size: int = 2500,
-        crop_margin: int = 128
+        crop_margin: int = 128,
+        force_cpu: bool = False
     ) -> np.ndarray:
         """
         IOPaint Main Inpainting Routine (100% matched with colab_server.py).
@@ -341,12 +370,12 @@ class IOPaintEngine:
                 crop_img, crop_mask, [l, t, r, b] = self._crop_box(image_rgb, mask, box, margin=crop_margin)
                 if not crop_mask.any():
                     continue
-                crop_res_bgr = self._pad_forward(crop_img, crop_mask)
+                crop_res_bgr = self._pad_forward(crop_img, crop_mask, force_cpu=force_cpu)
                 inpaint_res_bgr[t:b, l:r, :] = crop_res_bgr
             return inpaint_res_bgr
         else:
             # Full-Page Coherent Pass: Highest quality for Manga (LaMa FFC sees entire page structure & tones)
-            return self._pad_forward(image_rgb, mask)
+            return self._pad_forward(image_rgb, mask, force_cpu=force_cpu)
 
 # --------------------------------------------------------------------------------------
 # 5. ComicTextDetector Engine (100% identical to colab_server.py lines 365-445)
@@ -446,7 +475,8 @@ class MangaCleanerPipeline:
         dilation_px: int = 8,
         custom_mask: Optional[Image.Image] = None,
         model_name: Optional[str] = None,
-        det_threshold: float = 0.20
+        det_threshold: float = 0.20,
+        force_cpu: bool = False
     ) -> Tuple[Image.Image, Image.Image, Dict[str, Any]]:
         if model_name:
             self.iopaint.load_model(model_name)
@@ -482,7 +512,7 @@ class MangaCleanerPipeline:
         dilated_mask = cv2.dilate(raw_mask, kernel)
 
         # 3. Execute IOPaint Inpainting (Full-Page Coherent or Smart Crop)
-        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask)
+        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask, force_cpu=force_cpu)
         res_rgb = cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB)
 
         cleaned_pil = Image.fromarray(res_rgb)
@@ -490,9 +520,10 @@ class MangaCleanerPipeline:
             cleaned_pil = cleaned_pil.convert("RGBA")
             cleaned_pil.putalpha(alpha_channel)
 
+        actual_engine = "CPU RAM" if force_cpu else ("ZeroGPU A100 / CPU Fallback" if HAS_ZEROGPU else "CPU RAM")
         stats = {
             "model": self.iopaint.current_model_name,
-            "engine": f"IOPaint ({'ZeroGPU' if HAS_ZEROGPU else 'CPU'})",
+            "engine": f"IOPaint ({actual_engine})",
             "dilation_px": int(dilation_px),
             "det_threshold": float(det_threshold),
             "total_regions": 1 if is_custom else boxes_count,
@@ -580,6 +611,7 @@ def process_manga_zip(
     dilation_val: int = 10,
     det_thresh_val: float = 0.18,
     jpg_quality: int = 95,
+    device_mode: str = "auto",
     progress=gr.Progress(track_tqdm=True)
 ) -> Tuple[Optional[str], List[Tuple[Image.Image, str]], Dict[str, Any]]:
     """
@@ -634,7 +666,8 @@ def process_manga_zip(
                             dilation_px=int(dilation_val),
                             custom_mask=None,
                             model_name=model_name,
-                            det_threshold=float(det_thresh_val)
+                            det_threshold=float(det_thresh_val),
+                            force_cpu=(device_mode == "cpu")
                         )
 
                         jpg_bytes = save_pil_to_high_quality_jpg_bytes(cleaned_pil, quality=int(jpg_quality))
@@ -894,6 +927,11 @@ def create_gradio_ui() -> gr.Blocks:
                                 value="anime-lama",
                                 label="Mô hình AI"
                             )
+                            device_choice_tab1 = gr.Radio(
+                                choices=[("🚀 Tự động (Ưu tiên GPU A100, tự chuyển CPU khi hết lượt)", "auto"), ("💻 Chạy CPU RAM (Không tốn GPU quota, không lo bị chặn)", "cpu")],
+                                value="auto",
+                                label="Chế độ phần cứng"
+                            )
                             dilation_slider_tab1 = gr.Slider(0, 50, value=6, step=1, label="Độ mở rộng viền nét vẽ (Dilation px)")
                         btn_inpaint = gr.Button("🚀 AI Xóa Nền Vùng Chọn (ZeroGPU)", variant="primary", elem_classes="action-btn")
 
@@ -901,7 +939,7 @@ def create_gradio_ui() -> gr.Blocks:
                         output_image_tab1 = gr.Image(label="Tranh đã phục hồi (1:1 Pixel-Perfect)", type="pil", interactive=False)
                         output_stats_tab1 = gr.JSON(label="Thông số xử lý")
 
-                def on_run_interactive_inpaint(editor_data, model_name, dilation_val):
+                def on_run_interactive_inpaint(editor_data, model_name, dilation_val, device_mode_val):
                     bg_pil, custom_mask_pil = extract_image_and_mask_from_editor(editor_data)
                     if bg_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
@@ -909,13 +947,14 @@ def create_gradio_ui() -> gr.Blocks:
                         img_pil=bg_pil,
                         dilation_px=int(dilation_val),
                         custom_mask=custom_mask_pil,
-                        model_name=model_name
+                        model_name=model_name,
+                        force_cpu=(device_mode_val == "cpu")
                     )
                     return result_pil, stats
 
                 btn_inpaint.click(
                     fn=on_run_interactive_inpaint,
-                    inputs=[editor_input, model_choice_tab1, dilation_slider_tab1],
+                    inputs=[editor_input, model_choice_tab1, dilation_slider_tab1, device_choice_tab1],
                     outputs=[output_image_tab1, output_stats_tab1]
                 )
 
@@ -929,6 +968,11 @@ def create_gradio_ui() -> gr.Blocks:
                                 value="anime-lama",
                                 label="Mô hình AI"
                             )
+                            device_choice_tab2 = gr.Radio(
+                                choices=[("🚀 Tự động (Ưu tiên GPU A100, tự chuyển CPU khi hết lượt)", "auto"), ("💻 Chạy CPU RAM (Không tốn GPU quota, không lo bị chặn)", "cpu")],
+                                value="auto",
+                                label="Chế độ phần cứng"
+                            )
                             dilation_slider_tab2 = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px - tăng cao để xóa sạch viền/bóng chữ)")
                             det_threshold_slider_tab2 = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold - càng nhỏ càng bắt trọn chữ SFX/chữ mờ)")
                         btn_auto_clean = gr.Button("🪄 Tự Động Quét & Xóa Toàn Bộ (AI Auto-Clean)", variant="primary", elem_classes="action-btn")
@@ -938,7 +982,7 @@ def create_gradio_ui() -> gr.Blocks:
                         auto_output_mask = gr.Image(label="Mask ComicTextDetector", type="pil", interactive=False)
                         auto_output_stats = gr.JSON(label="Thống kê kết quả")
 
-                def on_run_auto_clean(img_pil, model_name, dilation_val, det_thresh_val):
+                def on_run_auto_clean(img_pil, model_name, dilation_val, det_thresh_val, device_mode_val):
                     if img_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
                     result_pil, mask_res_pil, stats = cleaner_pipeline.clean_image(
@@ -946,13 +990,14 @@ def create_gradio_ui() -> gr.Blocks:
                         dilation_px=int(dilation_val),
                         custom_mask=None,
                         model_name=model_name,
-                        det_threshold=float(det_thresh_val)
+                        det_threshold=float(det_thresh_val),
+                        force_cpu=(device_mode_val == "cpu")
                     )
                     return result_pil, mask_res_pil, stats
 
                 btn_auto_clean.click(
                     fn=on_run_auto_clean,
-                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2, det_threshold_slider_tab2],
+                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2, det_threshold_slider_tab2, device_choice_tab2],
                     outputs=[auto_output_cleaned, auto_output_mask, auto_output_stats]
                 )
 
@@ -970,6 +1015,11 @@ def create_gradio_ui() -> gr.Blocks:
                                 value="anime-lama",
                                 label="Mô hình AI"
                             )
+                            zip_device_choice = gr.Radio(
+                                choices=[("🚀 Tự động (Ưu tiên GPU A100, tự chuyển CPU khi hết lượt)", "auto"), ("💻 Chạy CPU RAM (Không tốn GPU quota, không lo bị chặn)", "cpu")],
+                                value="auto",
+                                label="Chế độ phần cứng"
+                            )
                             zip_dilation_slider = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px)")
                             zip_threshold_slider = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold)")
                             zip_quality_slider = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG (95: sắc nét tối đa, 4:4:4)")
@@ -982,7 +1032,7 @@ def create_gradio_ui() -> gr.Blocks:
 
                 btn_process_zip.click(
                     fn=process_manga_zip,
-                    inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider],
+                    inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider, zip_device_choice],
                     outputs=[zip_output_file, zip_output_gallery, zip_output_stats]
                 )
 
