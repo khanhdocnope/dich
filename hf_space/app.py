@@ -82,6 +82,18 @@ def get_saved_zip_files() -> List[str]:
     except Exception:
         return []
 
+def cleanup_old_zips(max_keep: int = 50):
+    """Deletes oldest ZIP files if count exceeds max_keep to prevent disk overflow."""
+    try:
+        files = get_saved_zip_files()
+        if len(files) > max_keep:
+            for old_file in files[max_keep:]:
+                old_path = os.path.join(OUTPUT_STORAGE_DIR, old_file)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+    except Exception as e:
+        print(f"Cleanup notice: {e}")
+
 def download_resilient(urls: List[str], dest: str, min_mb: int = 10) -> bool:
     if os.path.exists(dest) and os.path.getsize(dest) >= min_mb * 1024 * 1024:
         return True
@@ -720,6 +732,7 @@ def process_manga_zip(
         }
 
         progress(1.0, desc="✅ Hoàn tất toàn bộ tệp ZIP!")
+        cleanup_old_zips(max_keep=50)
         gallery_update = gr.update(visible=True, value=preview_gallery) if enable_preview else gr.update(visible=False, value=[])
         saved_choices = get_saved_zip_files()
         dropdown_update = gr.update(choices=saved_choices, value=out_zip_filename)
@@ -1098,7 +1111,8 @@ def create_gradio_ui() -> gr.Blocks:
                 btn_process_zip.click(
                     fn=process_manga_zip,
                     inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider, zip_device_choice, zip_preview_checkbox],
-                    outputs=[zip_output_file, zip_output_gallery, zip_output_stats, saved_zip_dropdown]
+                    outputs=[zip_output_file, zip_output_gallery, zip_output_stats, saved_zip_dropdown],
+                    concurrency_limit=1
                 )
 
             with gr.TabItem("📱 Kết Nối Ứng Dụng Mobile (REST API Guide)"):
