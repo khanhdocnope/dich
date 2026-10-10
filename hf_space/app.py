@@ -1178,23 +1178,23 @@ def create_gradio_ui() -> gr.Blocks:
     return demo
 
 # --------------------------------------------------------------------------------------
-# 10. Server Bootstrap: Native Gradio Launch + Embedded FastAPI Router
+# 10. Server Bootstrap: FastAPI + Gradio Unified App
 # --------------------------------------------------------------------------------------
+fastapi_app = FastAPI(title="Manga Text Cleaner API & Web")
+fastapi_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+fastapi_app.include_router(api_router)
+
 demo = create_gradio_ui()
+app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.environ.get("PORT", 7860))
-    print(f"🌟 Launching Manga Text Cleaner on http://0.0.0.0:{port} ...")
-
-    app, local_url, share_url = demo.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        prevent_thread_lock=True,
-        show_error=True
-    )
-
-    if hasattr(app, "include_router"):
-        app.include_router(api_router)
-        print("✅ REST API endpoints (/health, /api/clean_page, /api/inpaint, /api/clean_zip, /api/v1/inpaint) successfully attached!")
-
-    demo.block_thread()
+    print(f"🌟 Launching Manga Text Cleaner (FastAPI + Gradio) on http://0.0.0.0:{port} ...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
