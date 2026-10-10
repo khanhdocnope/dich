@@ -68,6 +68,20 @@ COMIC_ONNX_PATH = os.path.join(MODEL_DIR, "comictextdetector.pt.onnx")
 ANIME_LAMA_PT_PATH = os.path.join(MODEL_DIR, "anime-manga-big-lama.pt")
 BIG_LAMA_PT_PATH = os.path.join(MODEL_DIR, "big-lama.pt")
 
+OUTPUT_STORAGE_DIR = "/data/outputs" if (os.path.exists("/data") and os.path.isdir("/data")) else os.path.join(BASE_DIR, "outputs")
+os.makedirs(OUTPUT_STORAGE_DIR, exist_ok=True)
+
+def get_saved_zip_files() -> List[str]:
+    """Returns sorted list of saved output ZIP filenames (newest first)."""
+    if not os.path.exists(OUTPUT_STORAGE_DIR):
+        return []
+    try:
+        files = [f for f in os.listdir(OUTPUT_STORAGE_DIR) if f.endswith(".zip")]
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(OUTPUT_STORAGE_DIR, x)), reverse=True)
+        return files
+    except Exception:
+        return []
+
 def download_resilient(urls: List[str], dest: str, min_mb: int = 10) -> bool:
     if os.path.exists(dest) and os.path.getsize(dest) >= min_mb * 1024 * 1024:
         return True
@@ -612,11 +626,13 @@ def process_manga_zip(
     det_thresh_val: float = 0.18,
     jpg_quality: int = 95,
     device_mode: str = "auto",
+    enable_preview: bool = False,
     progress=gr.Progress(track_tqdm=True)
-) -> Tuple[Optional[str], List[Tuple[Image.Image, str]], Dict[str, Any]]:
+) -> Tuple[Optional[str], Any, Dict[str, Any], Any]:
     """
     Batch cleans all manga image pages from an uploaded ZIP archive.
-    Outputs each page as {original_name}_clean.jpg and returns a packaged ZIP archive.
+    Saves permanently in OUTPUT_STORAGE_DIR as cleaned_{name}_{timestamp}.zip.
+    Outputs each page as {original_name}_clean.jpg.
     """
     if zip_file is None:
         raise gr.Error("Vui lòng tải lên một tệp .zip!")
@@ -626,9 +642,10 @@ def process_manga_zip(
         raise gr.Error("Không tìm thấy tệp .zip tải lên!")
 
     valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".jfif"}
-    work_dir = tempfile.mkdtemp(prefix="manga_zip_")
-    out_zip_filename = f"cleaned_manga_{int(time.time())}.zip"
-    out_zip_path = os.path.join(work_dir, out_zip_filename)
+    in_name = os.path.splitext(os.path.basename(zip_path))[0]
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_zip_filename = f"cleaned_{in_name}_{timestamp}.zip"
+    out_zip_path = os.path.join(OUTPUT_STORAGE_DIR, out_zip_filename)
 
     preview_gallery = []
     processed_count = 0
@@ -678,7 +695,7 @@ def process_manga_zip(
                         out_zip.writestr(zip_entry_path, jpg_bytes)
                         processed_count += 1
 
-                        if len(preview_gallery) < 24:
+                        if enable_preview and len(preview_gallery) < 24:
                             thumb = cleaned_pil.copy()
                             thumb.thumbnail((600, 800))
                             preview_gallery.append((thumb, clean_filename))
@@ -695,6 +712,7 @@ def process_manga_zip(
             "total_pages": processed_count,
             "format": f"JPEG (Quality {jpg_quality}, Subsampling 4:4:4)",
             "output_zip": out_zip_filename,
+            "saved_location": out_zip_path,
             "zip_size_mb": f"{out_size_mb} MB",
             "total_time_seconds": f"{total_duration}s",
             "avg_speed": f"{avg_speed}s/trang",
@@ -702,7 +720,10 @@ def process_manga_zip(
         }
 
         progress(1.0, desc="✅ Hoàn tất toàn bộ tệp ZIP!")
-        return out_zip_path, preview_gallery, stats
+        gallery_update = gr.update(visible=True, value=preview_gallery) if enable_preview else gr.update(visible=False, value=[])
+        saved_choices = get_saved_zip_files()
+        dropdown_update = gr.update(choices=saved_choices, value=out_zip_filename)
+        return out_zip_path, gallery_update, stats, dropdown_update
 
     except Exception as e:
         print(f"ZIP processing error: {e}")
@@ -863,21 +884,22 @@ async def api_clean_zip(
             temp_in.write(content)
             temp_in_path = temp_in.name
 
-        out_zip_path, _, stats = await run_in_threadpool(
+        out_zip_path, _, stats, _ = await run_in_threadpool(
             process_manga_zip,
             zip_file=temp_in_path,
             model_name=model_name or "anime-lama",
             dilation_val=dilation_px or 10,
             det_thresh_val=det_threshold or 0.18,
             jpg_quality=quality or 95,
+            device_mode="auto",
+            enable_preview=False,
             progress=gr.Progress()
         )
 
-        out_name = f"cleaned_{os.path.splitext(file.filename)[0]}.zip"
         return FileResponse(
             out_zip_path,
             media_type="application/zip",
-            filename=out_name
+            filename=os.path.basename(out_zip_path)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Clean ZIP error: {str(e)}")
@@ -1023,17 +1045,60 @@ def create_gradio_ui() -> gr.Blocks:
                             zip_dilation_slider = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px)")
                             zip_threshold_slider = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold)")
                             zip_quality_slider = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG (95: sắc nét tối đa, 4:4:4)")
+                            zip_preview_checkbox = gr.Checkbox(
+                                value=False,
+                                label="🖼️ Hiển thị xem trước các trang (Preview Gallery - tích chọn nếu muốn xem ảnh)"
+                            )
                         btn_process_zip = gr.Button("🚀 Bắt Đầu Quét & Xóa Toàn Bộ Tệp ZIP", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=7):
-                        zip_output_file = gr.File(label="Tệp ZIP kết quả (Chứa các file *_clean.jpg)", interactive=False)
-                        zip_output_stats = gr.JSON(label="Thống kê kết quả xử lý")
-                        zip_output_gallery = gr.Gallery(label="Xem trước các trang đã làm sạch", columns=3, height=450)
+                        zip_output_file = gr.File(label="📦 Tệp ZIP kết quả (Chứa các file *_clean.jpg)", interactive=False)
+                        zip_output_stats = gr.JSON(label="📊 Thống kê kết quả & Vị trí lưu trữ")
+                        zip_output_gallery = gr.Gallery(label="🖼️ Xem trước các trang đã làm sạch", columns=3, height=450, visible=False)
+
+                        with gr.Accordion("📂 Lịch Sử Tệp ZIP Đã Lưu Trên Server (Chống Mất File)", open=True):
+                            gr.Markdown(
+                                "💾 *Tất cả các tệp ZIP sau khi xử lý đều được lưu trữ cố định trên server. "
+                                "Nếu bạn vô tình đóng trình duyệt hoặc mất kết nối, hãy chọn tệp bên dưới để tải lại ngay mà không cần chạy lại.*"
+                            )
+                            with gr.Row():
+                                saved_zip_dropdown = gr.Dropdown(
+                                    choices=get_saved_zip_files(),
+                                    value=get_saved_zip_files()[0] if get_saved_zip_files() else None,
+                                    label="Danh sách tệp ZIP đã lưu trên server",
+                                    scale=8
+                                )
+                                btn_refresh_saved = gr.Button("🔄 Làm mới", scale=2)
+                            btn_download_saved = gr.Button("⬇️ Tải Lại Tệp ZIP Đã Chọn", variant="secondary")
+
+                def on_download_saved_zip(selected_filename):
+                    if not selected_filename:
+                        raise gr.Error("Vui lòng chọn một tệp ZIP từ danh sách!")
+                    file_path = os.path.join(OUTPUT_STORAGE_DIR, selected_filename)
+                    if not os.path.exists(file_path):
+                        raise gr.Error("Tệp không còn tồn tại trên server!")
+                    return file_path
+
+                def on_refresh_saved_list():
+                    choices = get_saved_zip_files()
+                    return gr.update(choices=choices, value=choices[0] if choices else None)
+
+                btn_download_saved.click(
+                    fn=on_download_saved_zip,
+                    inputs=[saved_zip_dropdown],
+                    outputs=[zip_output_file]
+                )
+
+                btn_refresh_saved.click(
+                    fn=on_refresh_saved_list,
+                    inputs=[],
+                    outputs=[saved_zip_dropdown]
+                )
 
                 btn_process_zip.click(
                     fn=process_manga_zip,
-                    inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider, zip_device_choice],
-                    outputs=[zip_output_file, zip_output_gallery, zip_output_stats]
+                    inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider, zip_device_choice, zip_preview_checkbox],
+                    outputs=[zip_output_file, zip_output_gallery, zip_output_stats, saved_zip_dropdown]
                 )
 
             with gr.TabItem("📱 Kết Nối Ứng Dụng Mobile (REST API Guide)"):
