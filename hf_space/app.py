@@ -968,13 +968,17 @@ def create_gradio_ui() -> gr.Blocks:
                                 label="Chế độ phần cứng"
                             )
                             dilation_slider_tab1 = gr.Slider(0, 50, value=6, step=1, label="Độ mở rộng viền nét vẽ (Dilation px)")
+                            quality_slider_tab1 = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG (95: nét tối đa 4:4:4)")
                         btn_inpaint = gr.Button("🚀 AI Xóa Nền Vùng Chọn (ZeroGPU)", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=6):
                         output_image_tab1 = gr.Image(label="Tranh đã phục hồi (1:1 Pixel-Perfect)", type="pil", interactive=False)
+                        with gr.Row():
+                            btn_download_tab1 = gr.DownloadButton("📥 Tải Ảnh Đầy Đủ (.JPG Siêu Nét 4:4:4)", variant="secondary", size="lg", visible=False, elem_classes="action-btn")
+                        download_file_tab1 = gr.File(label="Tệp ảnh .JPG kết quả (Tải trực tiếp tránh bị WebP)", interactive=False, visible=False)
                         output_stats_tab1 = gr.JSON(label="Thông số xử lý")
 
-                def on_run_interactive_inpaint(editor_data, model_name, dilation_val, device_mode_val):
+                def on_run_interactive_inpaint(editor_data, model_name, dilation_val, device_mode_val, jpg_quality_val=95):
                     bg_pil, custom_mask_pil = extract_image_and_mask_from_editor(editor_data)
                     if bg_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
@@ -985,18 +989,28 @@ def create_gradio_ui() -> gr.Blocks:
                         model_name=model_name,
                         force_cpu=(device_mode_val == "cpu")
                     )
-                    return result_pil, stats
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    clean_filename = f"inpaint_clean_{timestamp}.jpg"
+                    clean_filepath = os.path.join(OUTPUT_STORAGE_DIR, clean_filename)
+                    jpg_bytes = save_pil_to_high_quality_jpg_bytes(result_pil, quality=int(jpg_quality_val))
+                    with open(clean_filepath, "wb") as f:
+                        f.write(jpg_bytes)
+
+                    stats["saved_jpg"] = clean_filename
+                    stats["format"] = f"JPEG (Quality {int(jpg_quality_val)}, Subsampling 4:4:4)"
+
+                    return result_pil, stats, gr.update(value=clean_filepath, visible=True), gr.update(value=clean_filepath, visible=True)
 
                 btn_inpaint.click(
                     fn=on_run_interactive_inpaint,
-                    inputs=[editor_input, model_choice_tab1, dilation_slider_tab1, device_choice_tab1],
-                    outputs=[output_image_tab1, output_stats_tab1]
+                    inputs=[editor_input, model_choice_tab1, dilation_slider_tab1, device_choice_tab1, quality_slider_tab1],
+                    outputs=[output_image_tab1, output_stats_tab1, btn_download_tab1, download_file_tab1]
                 )
 
             with gr.TabItem("⚡ Tự Động Xóa Toàn Bộ (1-Click Auto Clean)"):
                 with gr.Row():
                     with gr.Column(scale=6):
-                        auto_input_image = gr.Image(type="pil", label="Tải ảnh gốc Manga / Manhwa", elem_classes="mobile-canvas-container")
+                        auto_input_image = gr.Image(type="filepath", label="Tải ảnh gốc Manga / Manhwa", elem_classes="mobile-canvas-container")
                         with gr.Accordion("⚙️ Tùy chọn nâng cao", open=True):
                             model_choice_tab2 = gr.Radio(
                                 choices=[("Anime-Manga Big-LaMa", "anime-lama"), ("Standard Big-LaMa", "lama")],
@@ -1010,16 +1024,35 @@ def create_gradio_ui() -> gr.Blocks:
                             )
                             dilation_slider_tab2 = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px - tăng cao để xóa sạch viền/bóng chữ)")
                             det_threshold_slider_tab2 = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold - càng nhỏ càng bắt trọn chữ SFX/chữ mờ)")
+                            quality_slider_tab2 = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG đầu ra (95: sắc nét tối đa, 4:4:4)")
                         btn_auto_clean = gr.Button("🪄 Tự Động Quét & Xóa Toàn Bộ (AI Auto-Clean)", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=6):
                         auto_output_cleaned = gr.Image(label="Kết quả sạch chữ", type="pil", interactive=False)
+                        with gr.Row():
+                            btn_download_tab2 = gr.DownloadButton("📥 Tải Ảnh Đầy Đủ (.JPG Siêu Nét 4:4:4)", variant="secondary", size="lg", visible=False, elem_classes="action-btn")
+                        download_file_tab2 = gr.File(label="Tệp ảnh .JPG kết quả (Tải trực tiếp tránh bị WebP)", interactive=False, visible=False)
                         auto_output_mask = gr.Image(label="Mask ComicTextDetector", type="pil", interactive=False)
                         auto_output_stats = gr.JSON(label="Thống kê kết quả")
 
-                def on_run_auto_clean(img_pil, model_name, dilation_val, det_thresh_val, device_mode_val):
-                    if img_pil is None:
+                def on_run_auto_clean(img_input, model_name, dilation_val, det_thresh_val, device_mode_val, jpg_quality_val=95):
+                    if img_input is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
+
+                    if isinstance(img_input, Image.Image):
+                        img_pil = img_input
+                        clean_filename = f"clean_page_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+                    elif isinstance(img_input, str) and os.path.exists(img_input):
+                        orig_filename = os.path.basename(img_input)
+                        name_no_ext, _ = os.path.splitext(orig_filename)
+                        if not name_no_ext or name_no_ext.lower() in ("image", "input", "tmp"):
+                            clean_filename = f"clean_page_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+                        else:
+                            clean_filename = f"{name_no_ext}_clean.jpg"
+                        img_pil = Image.open(img_input)
+                    else:
+                        raise gr.Error("Định dạng ảnh không hợp lệ!")
+
                     result_pil, mask_res_pil, stats = cleaner_pipeline.clean_image(
                         img_pil=img_pil,
                         dilation_px=int(dilation_val),
@@ -1028,12 +1061,22 @@ def create_gradio_ui() -> gr.Blocks:
                         det_threshold=float(det_thresh_val),
                         force_cpu=(device_mode_val == "cpu")
                     )
-                    return result_pil, mask_res_pil, stats
+
+                    clean_filepath = os.path.join(OUTPUT_STORAGE_DIR, clean_filename)
+                    jpg_bytes = save_pil_to_high_quality_jpg_bytes(result_pil, quality=int(jpg_quality_val))
+                    with open(clean_filepath, "wb") as f:
+                        f.write(jpg_bytes)
+
+                    stats["saved_jpg"] = clean_filename
+                    stats["output_filename"] = clean_filename
+                    stats["format"] = f"JPEG (Quality {int(jpg_quality_val)}, Subsampling 4:4:4)"
+
+                    return result_pil, mask_res_pil, stats, gr.update(value=clean_filepath, visible=True), gr.update(value=clean_filepath, visible=True)
 
                 btn_auto_clean.click(
                     fn=on_run_auto_clean,
-                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2, det_threshold_slider_tab2, device_choice_tab2],
-                    outputs=[auto_output_cleaned, auto_output_mask, auto_output_stats]
+                    inputs=[auto_input_image, model_choice_tab2, dilation_slider_tab2, det_threshold_slider_tab2, device_choice_tab2, quality_slider_tab2],
+                    outputs=[auto_output_cleaned, auto_output_mask, auto_output_stats, btn_download_tab2, download_file_tab2]
                 )
 
             with gr.TabItem("📦 Xử Lý Hàng Loạt Tệp ZIP (Batch ZIP Cleaner)"):

@@ -484,7 +484,10 @@ export const triggerDownloadImage = (filename: string, base64OrBlobUrl: string) 
   try {
     const link = document.createElement('a');
     link.href = base64OrBlobUrl;
-    const downloadName = filename.toLowerCase().endsWith('.png') ? filename : `${filename}.png`;
+    const isJpg = filename.toLowerCase().endsWith('.jpg') || filename.toLowerCase().endsWith('.jpeg') || base64OrBlobUrl.startsWith('data:image/jpeg');
+    const downloadName = isJpg
+      ? (filename.toLowerCase().endsWith('.jpg') || filename.toLowerCase().endsWith('.jpeg') ? filename : `${filename}.jpg`)
+      : (filename.toLowerCase().endsWith('.png') ? filename : `${filename}.png`);
     link.download = downloadName;
     document.body.appendChild(link);
     link.click();
