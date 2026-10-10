@@ -9,6 +9,7 @@ app_file: app.py
 pinned: false
 license: mit
 short_description: Production AI Inpainting for Manga & Manhwa on ZeroGPU (Nvidia A100)
+startup_duration_timeout: 1h
 ---
 
 # 🎨 Manga Text Cleaner (ZeroGPU Edition)

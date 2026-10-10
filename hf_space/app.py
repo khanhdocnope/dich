@@ -1098,5 +1098,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         timeout_keep_alive=65,
-        access_log=True
+        access_log=True,
+        forwarded_allow_ips="*"
     )
