@@ -22,6 +22,9 @@ import io
 import time
 import base64
 import gc
+import zipfile
+import tempfile
+import re
 from enum import Enum
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -50,7 +53,7 @@ except ImportError:
 from fastapi import APIRouter, FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, FileResponse
 from pydantic import BaseModel
 import gradio as gr
 
@@ -548,6 +551,130 @@ def extract_image_and_mask_from_editor(editor_data: Any) -> Tuple[Optional[Image
 
     return None, None
 
+def natural_sort_key(s: str):
+    """Sorts strings with embedded numbers naturally (e.g. 1, 2, ..., 10 instead of 1, 10, 2)."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+def save_pil_to_high_quality_jpg_bytes(pil_img: Image.Image, quality: int = 95) -> bytes:
+    """
+    Saves a PIL Image as crisp, high-quality JPEG (subsampling=0 / 4:4:4, quality=95, optimize=True).
+    Ensures manga line art and screen tones remain pin-sharp without chroma subsampling blur.
+    """
+    buf = io.BytesIO()
+    if pil_img.mode in ("RGBA", "LA", "P"):
+        bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+        if pil_img.mode == "RGBA":
+            bg.paste(pil_img, mask=pil_img.split()[-1])
+        else:
+            bg.paste(pil_img.convert("RGB"))
+        save_img = bg
+    else:
+        save_img = pil_img.convert("RGB")
+    
+    save_img.save(buf, format="JPEG", quality=quality, subsampling=0, optimize=True)
+    return buf.getvalue()
+
+def process_manga_zip(
+    zip_file: Any,
+    model_name: str = "anime-lama",
+    dilation_val: int = 10,
+    det_thresh_val: float = 0.18,
+    jpg_quality: int = 95,
+    progress=gr.Progress(track_tqdm=True)
+) -> Tuple[Optional[str], List[Tuple[Image.Image, str]], Dict[str, Any]]:
+    """
+    Batch cleans all manga image pages from an uploaded ZIP archive.
+    Outputs each page as {original_name}_clean.jpg and returns a packaged ZIP archive.
+    """
+    if zip_file is None:
+        raise gr.Error("Vui lòng tải lên một tệp .zip!")
+    
+    zip_path = zip_file.name if hasattr(zip_file, "name") else str(zip_file)
+    if not os.path.exists(zip_path):
+        raise gr.Error("Không tìm thấy tệp .zip tải lên!")
+
+    valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".jfif"}
+    work_dir = tempfile.mkdtemp(prefix="manga_zip_")
+    out_zip_filename = f"cleaned_manga_{int(time.time())}.zip"
+    out_zip_path = os.path.join(work_dir, out_zip_filename)
+
+    preview_gallery = []
+    processed_count = 0
+    start_time = time.time()
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as in_zip:
+            file_list = [f for f in in_zip.namelist() if not f.startswith("__MACOSX/") and not os.path.basename(f).startswith(".")]
+            image_files = [f for f in file_list if os.path.splitext(f.lower())[1] in valid_exts]
+            
+            if not image_files:
+                raise gr.Error("Không tìm thấy tệp ảnh hợp lệ (.png, .jpg, .webp) bên trong tệp .zip!")
+
+            # Natural numerical sort (1.png, 2.png, ..., 10.png)
+            image_files.sort(key=natural_sort_key)
+            total_images = len(image_files)
+
+            with zipfile.ZipFile(out_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as out_zip:
+                for idx, img_rel_path in enumerate(image_files):
+                    base_name = os.path.basename(img_rel_path)
+                    name_no_ext = os.path.splitext(base_name)[0]
+                    clean_filename = f"{name_no_ext}_clean.jpg"
+
+                    progress(
+                        (idx + 0.1) / total_images,
+                        desc=f"Đang xử lý trang {idx + 1}/{total_images}: {base_name}"
+                    )
+
+                    try:
+                        raw_data = in_zip.read(img_rel_path)
+                        img_pil = Image.open(io.BytesIO(raw_data))
+
+                        cleaned_pil, _, _ = cleaner_pipeline.clean_image(
+                            img_pil=img_pil,
+                            dilation_px=int(dilation_val),
+                            custom_mask=None,
+                            model_name=model_name,
+                            det_threshold=float(det_thresh_val)
+                        )
+
+                        jpg_bytes = save_pil_to_high_quality_jpg_bytes(cleaned_pil, quality=int(jpg_quality))
+
+                        rel_dir = os.path.dirname(img_rel_path)
+                        zip_entry_path = os.path.join(rel_dir, clean_filename).replace("\\", "/") if rel_dir else clean_filename
+
+                        out_zip.writestr(zip_entry_path, jpg_bytes)
+                        processed_count += 1
+
+                        if len(preview_gallery) < 24:
+                            thumb = cleaned_pil.copy()
+                            thumb.thumbnail((600, 800))
+                            preview_gallery.append((thumb, clean_filename))
+
+                    except Exception as e:
+                        print(f"⚠️ Lỗi khi xử lý {img_rel_path}: {e}")
+
+        total_duration = round(time.time() - start_time, 2)
+        avg_speed = round(total_duration / max(processed_count, 1), 2)
+        out_size_mb = round(os.path.getsize(out_zip_path) / (1024 * 1024), 2)
+
+        stats = {
+            "status": "success",
+            "total_pages": processed_count,
+            "format": f"JPEG (Quality {jpg_quality}, Subsampling 4:4:4)",
+            "output_zip": out_zip_filename,
+            "zip_size_mb": f"{out_size_mb} MB",
+            "total_time_seconds": f"{total_duration}s",
+            "avg_speed": f"{avg_speed}s/trang",
+            "model_used": cleaner_pipeline.iopaint.current_model_name
+        }
+
+        progress(1.0, desc="✅ Hoàn tất toàn bộ tệp ZIP!")
+        return out_zip_path, preview_gallery, stats
+
+    except Exception as e:
+        print(f"ZIP processing error: {e}")
+        raise gr.Error(str(e))
+
 # --------------------------------------------------------------------------------------
 # 8. REST API Endpoints (100% matched with Studio App and colab_server.py)
 # --------------------------------------------------------------------------------------
@@ -688,6 +815,40 @@ async def api_v1_inpaint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"API error: {str(e)}")
 
+@api_router.post("/api/clean_zip")
+async def api_clean_zip(
+    file: UploadFile = File(...),
+    model_name: Optional[str] = Form("anime-lama"),
+    dilation_px: Optional[int] = Form(10),
+    det_threshold: Optional[float] = Form(0.18),
+    quality: Optional[int] = Form(95)
+):
+    try:
+        suffix = os.path.splitext(file.filename)[1] or ".zip"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_in:
+            content = await file.read()
+            temp_in.write(content)
+            temp_in_path = temp_in.name
+
+        out_zip_path, _, stats = await run_in_threadpool(
+            process_manga_zip,
+            zip_file=temp_in_path,
+            model_name=model_name or "anime-lama",
+            dilation_val=dilation_px or 10,
+            det_thresh_val=det_threshold or 0.18,
+            jpg_quality=quality or 95,
+            progress=gr.Progress()
+        )
+
+        out_name = f"cleaned_{os.path.splitext(file.filename)[0]}.zip"
+        return FileResponse(
+            out_zip_path,
+            media_type="application/zip",
+            filename=out_name
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Clean ZIP error: {str(e)}")
+
 # --------------------------------------------------------------------------------------
 # 9. Gradio Mobile-First Web UI
 # --------------------------------------------------------------------------------------
@@ -795,6 +956,36 @@ def create_gradio_ui() -> gr.Blocks:
                     outputs=[auto_output_cleaned, auto_output_mask, auto_output_stats]
                 )
 
+            with gr.TabItem("📦 Xử Lý Hàng Loạt Tệp ZIP (Batch ZIP Cleaner)"):
+                with gr.Row():
+                    with gr.Column(scale=5):
+                        zip_input_file = gr.File(
+                            label="Tải lên tệp .ZIP chứa nhiều ảnh Manga / Manhwa",
+                            file_types=[".zip"],
+                            type="filepath"
+                        )
+                        with gr.Accordion("⚙️ Tùy chọn nâng cao", open=True):
+                            zip_model_choice = gr.Radio(
+                                choices=[("Anime-Manga Big-LaMa", "anime-lama"), ("Standard Big-LaMa", "lama")],
+                                value="anime-lama",
+                                label="Mô hình AI"
+                            )
+                            zip_dilation_slider = gr.Slider(0, 50, value=10, step=1, label="Độ mở rộng viền ký tự (Dilation px)")
+                            zip_threshold_slider = gr.Slider(0.05, 0.40, value=0.18, step=0.01, label="Ngưỡng nhạy phát hiện chữ (Threshold)")
+                            zip_quality_slider = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG (95: sắc nét tối đa, 4:4:4)")
+                        btn_process_zip = gr.Button("🚀 Bắt Đầu Quét & Xóa Toàn Bộ Tệp ZIP", variant="primary", elem_classes="action-btn")
+
+                    with gr.Column(scale=7):
+                        zip_output_file = gr.File(label="Tệp ZIP kết quả (Chứa các file *_clean.jpg)", interactive=False)
+                        zip_output_stats = gr.JSON(label="Thống kê kết quả xử lý")
+                        zip_output_gallery = gr.Gallery(label="Xem trước các trang đã làm sạch", columns=3, height=450)
+
+                btn_process_zip.click(
+                    fn=process_manga_zip,
+                    inputs=[zip_input_file, zip_model_choice, zip_dilation_slider, zip_threshold_slider, zip_quality_slider],
+                    outputs=[zip_output_file, zip_output_gallery, zip_output_stats]
+                )
+
             with gr.TabItem("📱 Kết Nối Ứng Dụng Mobile (REST API Guide)"):
                 gr.Markdown(
                     """
@@ -806,6 +997,7 @@ def create_gradio_ui() -> gr.Blocks:
                     - `POST /api/clean_page` : Xóa toàn trang tự động
                     - `POST /api/inpaint` : Xóa theo nét cọ
                     - `POST /api/detect` : Nhận diện bounding box
+                    - `POST /api/clean_zip` : Tải lên ZIP nhiều trang -> Trả về ZIP chứa file *_clean.jpg
                     - `POST /api/v1/inpaint` : Upload file trực tiếp bằng cURL / Mobile Client
                     """
                 )
@@ -831,6 +1023,6 @@ if __name__ == "__main__":
 
     if hasattr(app, "include_router"):
         app.include_router(api_router)
-        print("✅ REST API endpoints (/health, /api/clean_page, /api/inpaint, /api/v1/inpaint) successfully attached!")
+        print("✅ REST API endpoints (/health, /api/clean_page, /api/inpaint, /api/clean_zip, /api/v1/inpaint) successfully attached!")
 
     demo.block_thread()

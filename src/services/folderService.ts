@@ -145,7 +145,9 @@ export const saveImageToOutputFolder = async (
   folderName: string = 'MangaTranslator/Output',
   triggerDownload: boolean = true
 ): Promise<{ success: boolean; savedPath?: string; method: string }> => {
-  const cleanFilename = filename.toLowerCase().endsWith('.png') ? filename : `${filename}.png`;
+  const baseName = filename.replace(/\.(png|jpe?g|webp|bmp)$/i, '');
+  const isJpg = imageBase64.startsWith('data:image/jpeg') || imageBase64.startsWith('data:image/jpg') || !filename.toLowerCase().endsWith('.png');
+  const cleanFilename = isJpg ? `${baseName}.jpg` : `${baseName}.png`;
 
   // 1. Android Capacitor Native Filesystem
   if (Capacitor.isNativePlatform()) {
@@ -230,7 +232,9 @@ export const exportImagesAsZip = async (
       const exportUrl = img.outputUrl || img.rawUrl;
       if (!exportUrl) continue;
 
-      const cleanName = img.filename.toLowerCase().endsWith('.png') ? img.filename : `${img.filename}.png`;
+      const baseName = img.filename.replace(/\.(png|jpe?g|webp|bmp)$/i, '');
+      const isJpg = exportUrl.startsWith('data:image/jpeg') || exportUrl.startsWith('data:image/jpg') || !img.filename.toLowerCase().endsWith('.png');
+      const cleanName = isJpg ? `${baseName}.jpg` : `${baseName}.png`;
 
       if (img.outputBlob) {
         zip.file(cleanName, img.outputBlob);

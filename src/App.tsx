@@ -425,7 +425,7 @@ export const App: React.FC = () => {
           renderBubbleOnCanvas(ctx, b);
         });
 
-        resolve(canvas.toDataURL('image/png'));
+        resolve(canvas.toDataURL('image/jpeg', 0.95));
       };
       img.onerror = () => {
         showToast('error', `Không thể giải mã ảnh "${currentImage.filename}" để xuất.`, 'Lỗi Đọc Ảnh');
@@ -540,7 +540,7 @@ export const App: React.FC = () => {
           pageBubbles.forEach((b: Bubble) => {
             renderBubbleOnCanvas(ctx, b);
           });
-          resolve(canvas.toDataURL('image/png'));
+          resolve(canvas.toDataURL('image/jpeg', 0.95));
         };
         img.onerror = () => resolve(null);
       });
