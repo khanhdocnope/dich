@@ -1,24 +1,14 @@
-"""
+r"""
 ========================================================================================
-Manga Text Cleaner - AI Inpainting Web App & REST API (Hugging Face ZeroGPU Edition)
+Manga Translator Studio - Core AI Inpainting & Cleaner Engine (Hugging Face ZeroGPU Edition)
 ========================================================================================
-Platform: Hugging Face Spaces (Nvidia A100 ZeroGPU) & Mobile REST API
-Features:
-  - Dual Mode Inpainting:
-      * Anime-Manga Big-LaMa (Optimized for Japanese manga & Korean manhwa line-art)
-      * Standard Big-LaMa (General-purpose high-frequency textures & natural scenes)
-  - ComicTextDetector Engine: OpenCV CPU DNN (Fast automatic speech bubble detection)
-  - 1:1 Pixel-Perfect Mask Composite (Zero blur on original artwork outside mask)
-  - ZeroGPU Architecture: Dynamic GPU Allocation via @spaces.GPU(duration=60)
-  - Native Gradio Launch with Embedded FastAPI Router for 100% Spaces compatibility
-  - 100% Compatible Endpoints:
-      * GET  /health & /api/v1/health
-      * POST /api/clean_page
-      * POST /api/inpaint
-      * POST /api/detect
-      * POST /api/switch_model
-      * POST /api/v1/inpaint
-      * POST /api/v1/inpaint/batch
+Ported from d:\dich\colab\colab_server.py with 100% Algorithm Fidelity:
+  - IOPaint Core Architecture: Symmetric Modulo-8 Padding + 1:1 Pixel-Perfect Composite
+  - Models: IOPaint Anime-Manga Big-LaMa (Sanster) & IOPaint Standard Big-LaMa
+  - High-Resolution Strategies: Full-Page Coherent (Manga) & Smart Context Cropping (Webtoon)
+  - 4-Stage Pipeline: ComicTextDetector + Dilation + IOPaint Inpainting + Alpha Composite
+  - Hugging Face ZeroGPU: Dynamic @spaces.GPU(duration=60) Allocation & VRAM Release
+  - Native Gradio Launch + Embedded REST Router (/health, /api/clean_page, /api/inpaint, etc.)
 ========================================================================================
 """
 
@@ -32,13 +22,8 @@ import io
 import time
 import base64
 import gc
-import re
-import shutil
-import uuid
-import zipfile
-import threading
-from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List
+from enum import Enum
+from typing import List, Optional, Dict, Any, Tuple
 
 import cv2
 import numpy as np
@@ -72,113 +57,297 @@ import gradio as gr
 # --------------------------------------------------------------------------------------
 # 2. Paths & Model Downloader
 # --------------------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
-
-RESULT_DIR = Path("/tmp/mtc_results")
-RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
 COMIC_ONNX_PATH = os.path.join(MODEL_DIR, "comictextdetector.pt.onnx")
 ANIME_LAMA_PT_PATH = os.path.join(MODEL_DIR, "anime-manga-big-lama.pt")
 BIG_LAMA_PT_PATH = os.path.join(MODEL_DIR, "big-lama.pt")
 
-def resilient_download(urls: List[str], target_path: str, min_mb: int = 10) -> bool:
-    """Downloads model weights with retry across Hugging Face Hub and GitHub mirrors."""
-    if os.path.exists(target_path) and os.path.getsize(target_path) >= min_mb * 1024 * 1024:
+def download_resilient(urls: List[str], dest: str, min_mb: int = 10) -> bool:
+    if os.path.exists(dest) and os.path.getsize(dest) >= min_mb * 1024 * 1024:
         return True
-
     for url in urls:
         try:
-            print(f"⏳ Downloading {os.path.basename(target_path)} from: {url} ...")
-            torch.hub.download_url_to_file(url, target_path, progress=True)
-            if os.path.exists(target_path) and os.path.getsize(target_path) >= min_mb * 1024 * 1024:
-                file_mb = os.path.getsize(target_path) // (1024 * 1024)
-                print(f"✅ Successfully cached {os.path.basename(target_path)} ({file_mb} MB)")
+            print(f"⏳ Downloading {os.path.basename(dest)} from {url}...")
+            torch.hub.download_url_to_file(url, dest, progress=True)
+            if os.path.exists(dest) and os.path.getsize(dest) >= min_mb * 1024 * 1024:
+                print(f"✅ Downloaded {os.path.basename(dest)} ({os.path.getsize(dest) // (1024*1024)} MB)")
                 return True
-        except Exception as err:
-            print(f"⚠️ Mirror error ({url}): {err}")
-            if os.path.exists(target_path):
+        except Exception as e:
+            print(f"⚠️ Mirror notice ({url}): {e}")
+            if os.path.exists(dest):
                 try:
-                    os.remove(target_path)
+                    os.remove(dest)
                 except Exception:
                     pass
     return False
 
 # Download ComicTextDetector ONNX (~90 MB)
-resilient_download(
-    [
-        "https://huggingface.co/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx",
-        "https://huggingface.co/mayocream/comic-text-detector-onnx/resolve/main/comictextdetector.pt.onnx",
-        "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx"
-    ],
-    COMIC_ONNX_PATH,
-    min_mb=10
-)
+comic_urls = [
+    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx",
+    "https://huggingface.co/kzome/manga-cleaner/resolve/main/data/comictextdetector.pt.onnx",
+    "https://huggingface.co/mayocream/comic-text-detector-onnx/resolve/main/comictextdetector.pt.onnx"
+]
+download_resilient(comic_urls, COMIC_ONNX_PATH, 10)
 
-# Download Anime-Manga Big-LaMa TorchScript (~196 MB) - HIGH QUALITY MANGA INPAINTING
-resilient_download(
-    [
-        "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt",
-        "https://huggingface.co/kzome/manga-cleaner/resolve/main/data/anime-manga-big-lama.pt",
-        "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/anime-manga-big-lama.pt"
-    ],
-    ANIME_LAMA_PT_PATH,
-    min_mb=50
-)
+# Download Official IOPaint Models (Sanster)
+anime_lama_urls = [
+    "https://github.com/Sanster/models/releases/download/AnimeMangaInpainting/anime-manga-big-lama.pt",
+    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/anime-manga-big-lama.pt"
+]
+download_resilient(anime_lama_urls, ANIME_LAMA_PT_PATH, 50)
 
-# Download Standard Big-LaMa TorchScript (~196 MB)
-resilient_download(
-    [
-        "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
-        "https://huggingface.co/anyisalin/big-lama/resolve/main/big-lama.pt",
-        "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt"
-    ],
-    BIG_LAMA_PT_PATH,
-    min_mb=50
-)
+big_lama_urls = [
+    "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
+    "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
+    "https://hf-mirror.com/kzome/manga-cleaner/resolve/main/data/big-lama.pt"
+]
+download_resilient(big_lama_urls, BIG_LAMA_PT_PATH, 50)
 
 # --------------------------------------------------------------------------------------
-# 3. Model Loader & Inpainting Engine (CPU RAM Caching + ZeroGPU Execution)
+# 3. IOPaint Core Preprocessing & Helpers (Direct from colab_server.py)
 # --------------------------------------------------------------------------------------
-class ModelManager:
+def ceil_modulo(x: int, mod: int) -> int:
+    if x % mod == 0:
+        return x
+    return (x // mod + 1) * mod
+
+def pad_img_to_modulo(img: np.ndarray, mod: int = 8, min_size: Optional[int] = None) -> np.ndarray:
     """
-    Caches TorchScript LaMa weights in Host CPU RAM.
-    Transfers to GPU inside @spaces.GPU functions and cleans VRAM immediately after.
+    IOPaint symmetric modulo padding.
+    Symmetrically reflects boundary pixels so that dimensions are divisible by mod (8),
+    avoiding black border padding artifacts and bilinear downscaling degradation.
     """
-    def __init__(self):
-        self._cpu_models: Dict[str, torch.jit.ScriptModule] = {}
-        self.active_model_name = "anime-lama"
+    if len(img.shape) == 2:
+        img = img[:, :, np.newaxis]
+    height, width = img.shape[:2]
+    out_height = ceil_modulo(height, mod)
+    out_width = ceil_modulo(width, mod)
 
-    def get_cpu_model(self, model_name: str) -> Optional[torch.jit.ScriptModule]:
-        canonical = "anime-lama" if "anime" in model_name.lower() else "lama"
-        if canonical in self._cpu_models:
-            return self._cpu_models[canonical]
+    if min_size is not None:
+        out_width = max(min_size, out_width)
+        out_height = max(min_size, out_height)
 
-        target_path = ANIME_LAMA_PT_PATH if canonical == "anime-lama" else BIG_LAMA_PT_PATH
-        if not os.path.exists(target_path) or os.path.getsize(target_path) < 10 * 1024 * 1024:
-            target_path = BIG_LAMA_PT_PATH if os.path.exists(BIG_LAMA_PT_PATH) else ANIME_LAMA_PT_PATH
+    return np.pad(
+        img,
+        ((0, out_height - height), (0, out_width - width), (0, 0)),
+        mode="symmetric"
+    )
 
-        if os.path.exists(target_path) and os.path.getsize(target_path) >= 10 * 1024 * 1024:
+def norm_img(np_img: np.ndarray) -> np.ndarray:
+    """IOPaint image normalization to (C, H, W) float32 in [0, 1]."""
+    if len(np_img.shape) == 2:
+        np_img = np_img[:, :, np.newaxis]
+    np_img = np.transpose(np_img, (2, 0, 1))
+    return np_img.astype("float32") / 255.0
+
+def boxes_from_mask(mask: np.ndarray) -> List[np.ndarray]:
+    """Extracts bounding boxes [x1, y1, x2, y2] from a binary mask (IOPaint standard)."""
+    height, width = mask.shape[:2]
+    _, thresh = cv2.threshold(mask, 127, 255, 0)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    boxes = []
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w > 4 and h > 4:
+            box = np.array([x, y, x + w, y + h]).astype(int)
+            box[::2] = np.clip(box[::2], 0, width)
+            box[1::2] = np.clip(box[1::2], 0, height)
+            boxes.append(box)
+    return boxes
+
+class HDStrategy(str, Enum):
+    ORIGINAL = "ORIGINAL"
+    CROP = "CROP"
+    RESIZE = "RESIZE"
+
+# --------------------------------------------------------------------------------------
+# 4. IOPaint Inpainting Engine with ZeroGPU Support
+# --------------------------------------------------------------------------------------
+class IOPaintEngine:
+    def __init__(self, default_model: str = "anime-lama"):
+        self.pad_mod = 8
+        self.current_model_name = default_model
+        self.model = None
+        self.ready = False
+        self.loaded_models: Dict[str, Any] = {}
+        self.load_model(default_model)
+
+    def load_model(self, model_name: str) -> bool:
+        """Loads or switches active IOPaint model (anime-lama or lama) in Host CPU RAM."""
+        model_name = model_name.lower().strip()
+        if model_name in self.loaded_models:
+            self.model = self.loaded_models[model_name]
+            self.current_model_name = model_name
+            self.ready = True
+            print(f"🔄 Switched active IOPaint model to: {model_name}")
+            return True
+
+        target_path = None
+        if "anime" in model_name:
+            target_path = ANIME_LAMA_PT_PATH
+            canonical_name = "anime-lama"
+        else:
+            target_path = BIG_LAMA_PT_PATH
+            canonical_name = "lama"
+
+        if not os.path.exists(target_path) or os.path.getsize(target_path) < 10000000:
+            if target_path == ANIME_LAMA_PT_PATH and os.path.exists(BIG_LAMA_PT_PATH):
+                target_path = BIG_LAMA_PT_PATH
+                canonical_name = "lama"
+            elif target_path == BIG_LAMA_PT_PATH and os.path.exists(ANIME_LAMA_PT_PATH):
+                target_path = ANIME_LAMA_PT_PATH
+                canonical_name = "anime-lama"
+
+        if os.path.exists(target_path) and os.path.getsize(target_path) > 10000000:
             try:
-                print(f"📦 Loading {canonical} into Host CPU RAM ({os.path.basename(target_path)})...")
-                model = torch.jit.load(target_path, map_location="cpu")
-                model.eval()
-                self._cpu_models[canonical] = model
-                self.active_model_name = canonical
-                return model
+                print(f"⏳ Loading IOPaint model into CPU RAM: {canonical_name} ({os.path.basename(target_path)})...")
+                loaded = torch.jit.load(target_path, map_location="cpu")
+                loaded.eval()
+                self.loaded_models[canonical_name] = loaded
+                self.model = loaded
+                self.current_model_name = canonical_name
+                self.ready = True
+                print(f"✅ IOPaint Model '{canonical_name}' ready in CPU RAM!")
+                return True
             except Exception as e:
-                print(f"❌ Failed to load TorchScript model: {e}")
-                return None
-        return None
+                print(f"⚠️ Failed to load IOPaint model {target_path}: {e}")
+                self.ready = False
+                return False
+        return False
 
-model_manager = ModelManager()
+    @spaces.GPU(duration=60)
+    def forward(self, pad_image_rgb: np.ndarray, pad_mask: np.ndarray) -> np.ndarray:
+        """
+        IOPaint forward pass wrapped in @spaces.GPU for ZeroGPU Nvidia A100.
+        pad_image_rgb: [H, W, 3] RGB uint8 (modulo-8 padded)
+        pad_mask: [H, W, 1] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        gpu_model = self.model.to(dev)
 
-# Pre-load Anime-LaMa model into Host RAM during startup
-model_manager.get_cpu_model("anime-lama")
+        try:
+            img_norm = norm_img(pad_image_rgb)
+            mask_norm = norm_img(pad_mask)
+            mask_norm = (mask_norm > 0).astype(np.float32)
+
+            img_t = torch.from_numpy(img_norm).unsqueeze(0).to(dev, dtype=torch.float32)
+            mask_t = torch.from_numpy(mask_norm).unsqueeze(0).to(dev, dtype=torch.float32)
+
+            with torch.inference_mode():
+                out = gpu_model(img_t, mask_t)
+
+            cur_res = out[0].permute(1, 2, 0).detach().cpu().numpy()
+            cur_res = np.clip(cur_res * 255.0, 0, 255).astype(np.uint8)
+            cur_res = cv2.cvtColor(cur_res, cv2.COLOR_RGB2BGR)
+            return cur_res
+        finally:
+            gpu_model.to("cpu")
+            if dev == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
+
+    def _pad_forward(self, image_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """
+        Runs IOPaint forward pass with symmetric padding and 1:1 pixel-perfect compositing.
+        image_rgb: [H, W, 3] RGB uint8
+        mask: [H, W] or [H, W, 1] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        if len(mask.shape) == 2:
+            mask = mask[:, :, np.newaxis]
+        orig_h, orig_w = image_rgb.shape[:2]
+
+        pad_image = pad_img_to_modulo(image_rgb, mod=self.pad_mod)
+        pad_mask = pad_img_to_modulo(mask, mod=self.pad_mod)
+
+        result_bgr = self.forward(pad_image, pad_mask)
+        result_bgr = result_bgr[0:orig_h, 0:orig_w, :]
+
+        # 1:1 Pixel-Perfect Mask Composite (Preserves untouched original pixels perfectly)
+        mask_norm = (mask.astype(np.float32) / 255.0)
+        orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR).astype(np.float32)
+        res_bgr = result_bgr.astype(np.float32)
+        final_bgr = (res_bgr * mask_norm + orig_bgr * (1.0 - mask_norm)).clip(0, 255).astype(np.uint8)
+        return final_bgr
+
+    def _crop_box(self, image: np.ndarray, mask: np.ndarray, box: np.ndarray, margin: int = 128) -> Tuple[np.ndarray, np.ndarray, List[int]]:
+        """IOPaint bounding box crop with generous context expansion."""
+        box_h = box[3] - box[1]
+        box_w = box[2] - box[0]
+        cx = (box[0] + box[2]) // 2
+        cy = (box[1] + box[3]) // 2
+        img_h, img_w = image.shape[:2]
+
+        w = box_w + margin * 2
+        h = box_h + margin * 2
+
+        _l = cx - w // 2
+        _r = cx + w // 2
+        _t = cy - h // 2
+        _b = cy + h // 2
+
+        l = max(_l, 0)
+        r = min(_r, img_w)
+        t = max(_t, 0)
+        b = min(_b, img_h)
+
+        if _l < 0: r = min(img_w, r + abs(_l))
+        if _r > img_w: l = max(0, l - (_r - img_w))
+        if _t < 0: b = min(img_h, b + abs(_t))
+        if _b > img_h: t = max(0, t - (_b - img_h))
+
+        crop_img = image[t:b, l:r, :]
+        crop_mask = mask[t:b, l:r]
+        return crop_img, crop_mask, [l, t, r, b]
+
+    def inpaint(
+        self,
+        image_rgb: np.ndarray,
+        mask: np.ndarray,
+        hd_strategy: HDStrategy = HDStrategy.ORIGINAL,
+        crop_trigger_size: int = 2500,
+        crop_margin: int = 128
+    ) -> np.ndarray:
+        """
+        IOPaint Main Inpainting Routine (100% matched with colab_server.py).
+        - For regular Manga pages (<= 2500px): Uses full-image coherent pass for flawless global context.
+        - For gigantic Webtoons (> 2500px): Uses IOPaint CROP strategy with ample context windows.
+        image_rgb: [H, W, 3] uint8
+        mask: [H, W] uint8 (0 or 255)
+        returns: [H, W, 3] BGR uint8
+        """
+        if not self.ready or self.model is None:
+            orig_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+            return cv2.inpaint(orig_bgr, mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
+        h, w = image_rgb.shape[:2]
+        max_dim = max(h, w)
+        use_crop = (hd_strategy == HDStrategy.CROP) or (max_dim > crop_trigger_size)
+
+        if use_crop:
+            boxes = boxes_from_mask(mask)
+            if not boxes:
+                return cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+
+            inpaint_res_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR).copy()
+            for box in boxes:
+                crop_img, crop_mask, [l, t, r, b] = self._crop_box(image_rgb, mask, box, margin=crop_margin)
+                if not crop_mask.any():
+                    continue
+                crop_res_bgr = self._pad_forward(crop_img, crop_mask)
+                inpaint_res_bgr[t:b, l:r, :] = crop_res_bgr
+            return inpaint_res_bgr
+        else:
+            # Full-Page Coherent Pass: Highest quality for Manga (LaMa FFC sees entire page structure & tones)
+            return self._pad_forward(image_rgb, mask)
 
 # --------------------------------------------------------------------------------------
-# 4. ComicTextDetector Engine (CPU DNN OCR text bubble detection)
+# 5. ComicTextDetector Engine (100% identical to colab_server.py lines 365-445)
 # --------------------------------------------------------------------------------------
 class ComicTextDetectorEngine:
     def __init__(self, model_path: str = COMIC_ONNX_PATH):
@@ -192,25 +361,19 @@ class ComicTextDetectorEngine:
                 self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
                 self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
                 self.ready = True
-                print("✅ ComicTextDetector initialized successfully on CPU!")
+                print("✅ ComicTextDetector (OpenCV Engine) initialized successfully!")
             except Exception as e:
                 print(f"⚠️ ComicTextDetector init notice: {e}")
 
-    def detect_mask(
-        self,
-        img_bgr: np.ndarray,
-        input_size: int = 1024
-    ) -> Tuple[np.ndarray, List[Dict[str, int]]]:
+    def detect_mask(self, img_bgr: np.ndarray, input_size: int = 1024) -> Tuple[np.ndarray, List[Dict[str, int]]]:
         h, w = img_bgr.shape[:2]
         full_mask = np.zeros((h, w), dtype=np.uint8)
         boxes = []
 
         if not self.ready or self.net is None:
             gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-            _, bubble_mask = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
-            text_inside = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-            combined = cv2.bitwise_and(text_inside, bubble_mask)
-            return combined, []
+            _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+            return thresh, []
 
         chunk_h = 1200
         overlap = 100
@@ -231,277 +394,131 @@ class ComicTextDetectorEngine:
             self.net.setInput(blob)
             try:
                 outs = self.net.forward(self.net.getUnconnectedOutLayersNames())
+                det_prob = None
                 seg_prob = None
                 for out in outs:
-                    if len(out.shape) == 4:
-                        if out.shape[1] == 2:
-                            # 2-channel output: C0 is background, C1 is text
-                            c0 = out[0, 0]
-                            c1 = out[0, 1]
-                            exp_c0 = np.exp(np.clip(c0 - np.maximum(c0, c1), -15, 15))
-                            exp_c1 = np.exp(np.clip(c1 - np.maximum(c0, c1), -15, 15))
-                            seg_prob = exp_c1 / (exp_c0 + exp_c1 + 1e-6)
-                            break
-                        elif out.shape[1] == 1:
-                            raw = out[0, 0]
-                            if raw.min() < 0 or raw.max() > 1.0:
-                                prob = 1.0 / (1.0 + np.exp(-np.clip(raw, -15.0, 15.0)))
-                            else:
-                                prob = raw
-                            seg_prob = prob
-                            break
+                    if len(out.shape) == 4 and out.shape[1] == 1:
+                        seg_prob = out[0, 0]
+                    elif len(out.shape) == 4 and out.shape[1] == 2:
+                        det_prob = out[0, 0]  # Channel 0 is text probability
 
-                if seg_prob is not None:
-                    # Sanity check: Text should be minority (< 40% of patch area)
-                    if np.mean(seg_prob > 0.45) > 0.40:
-                        seg_prob = 1.0 - seg_prob
+                if det_prob is not None and seg_prob is not None:
+                    comb_prob = np.maximum(det_prob, seg_prob)
+                elif det_prob is not None:
+                    comb_prob = det_prob
+                elif seg_prob is not None:
+                    comb_prob = seg_prob
+                else:
+                    comb_prob = np.zeros((input_size, input_size), dtype=np.float32)
 
-                    seg_map = cv2.resize(seg_prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
-                    sub_mask = (seg_map > 0.40).astype(np.uint8) * 255
-                    full_mask[y:y2] = np.maximum(full_mask[y:y2], sub_mask)
+                mask_res = cv2.resize(comb_prob, (sub_w, sub_h), interpolation=cv2.INTER_LINEAR)
+                # Sensitive threshold to capture colored, stylized, and Japanese manga text
+                binary = (mask_res > 0.20).astype(np.uint8) * 255
+                full_mask[y:y2] = np.maximum(full_mask[y:y2], binary)
             except Exception as e:
-                print(f"DNN chunk inference notice: {e}")
+                print(f"Detection chunk error at y={y}: {e}")
 
-            if y2 >= h:
+            if y2 == h:
                 break
-            y += (chunk_h - overlap)
+            y = y2 - overlap
 
-        # Global Sanity Check: Text in manga is NEVER more than 35% of total page area!
-        white_ratio = np.mean(full_mask > 0)
-        if white_ratio > 0.35:
-            print(f"⚠️ Mask was inverted ({white_ratio*100:.1f}% white). Inverting back to protect artwork!")
-            full_mask = ((full_mask == 0).astype(np.uint8)) * 255
-
-        # Filter contours: eliminate noise and impossible page-sized blobs
-        page_area = h * w
-        clean_mask = np.zeros_like(full_mask)
         contours, _ = cv2.findContours(full_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             bx, by, bw, bh = cv2.boundingRect(cnt)
-            area = bw * bh
-            # Discard tiny speckle noise (< 25px) and giant page-sized artifacts (> 25% of whole page)
-            if 25 <= area <= 0.25 * page_area:
-                cv2.drawContours(clean_mask, [cnt], -1, 255, -1)
-                boxes.append({"x": int(bx), "y": int(by), "w": int(bw), "h": int(bh)})
+            if bw > 8 and bh > 8:
+                boxes.append({"x": int(bx), "y": int(by), "width": int(bw), "height": int(bh)})
 
-        return clean_mask, boxes
-
-detector_engine = ComicTextDetectorEngine()
+        return full_mask, boxes
 
 # --------------------------------------------------------------------------------------
-# 5. Image Pre/Post-Processing & High-Precision Inpainting
+# 6. Manga Cleaner Pipeline (100% matched with colab_server.py)
 # --------------------------------------------------------------------------------------
-def pad_to_multiple(img: np.ndarray, mask: np.ndarray, mod: int = 8):
-    """Reflect-pad both image and mask to be divisible by mod=8."""
-    h, w = img.shape[:2]
-    ph = (-h) % mod
-    pw = (-w) % mod
-    if ph == 0 and pw == 0:
-        return img, mask
-    img_pad = cv2.copyMakeBorder(img, 0, ph, 0, pw, cv2.BORDER_REFLECT_101)
-    mask_pad = cv2.copyMakeBorder(mask, 0, ph, 0, pw, cv2.BORDER_REFLECT_101)
-    return img_pad, mask_pad
+class MangaCleanerPipeline:
+    def __init__(self):
+        self.iopaint = IOPaintEngine(default_model="anime-lama")
+        self.detector = ComicTextDetectorEngine()
 
-def plan_patches(
-    rgb: np.ndarray,
-    mask: np.ndarray,
-    group_gap: int = 32,
-    ctx_ratio: float = 0.5,
-    ctx_min: int = 64,
-    ctx_max: int = 256
-) -> List[Tuple[Tuple[int, int, int, int], np.ndarray, np.ndarray]]:
-    """Groups nearby mask components and crops context windows to preserve 100% full-resolution clarity."""
-    H, W = mask.shape
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2 * group_gap + 1, 2 * group_gap + 1))
-    grp = cv2.dilate(mask, kernel)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(grp, connectivity=8)
+    def clean_image(
+        self,
+        img_pil: Image.Image,
+        dilation_px: int = 4,
+        custom_mask: Optional[Image.Image] = None,
+        model_name: Optional[str] = None
+    ) -> Tuple[Image.Image, Image.Image, Dict[str, Any]]:
+        if model_name:
+            self.iopaint.load_model(model_name)
 
-    patches = []
-    for i in range(1, n):
-        x, y, w, h = (int(v) for v in stats[i][:4])
-        sel = (labels[y:y + h, x:x + w] == i) & (mask[y:y + h, x:x + w] > 0)
-        ys, xs = np.nonzero(sel)
-        if ys.size == 0:
-            continue
-        bx0 = x + int(xs.min())
-        bx1 = x + int(xs.max()) + 1
-        by0 = y + int(ys.min())
-        by1 = y + int(ys.max()) + 1
+        # Preserve alpha channel if present
+        img_pil = ImageOps.exif_transpose(img_pil)
+        has_alpha = img_pil.mode in ("RGBA", "LA")
+        alpha_channel = img_pil.split()[-1] if has_alpha else None
 
-        ctx = int(np.clip(max(bx1 - bx0, by1 - by0) * ctx_ratio, ctx_min, ctx_max))
-        x0 = max(0, bx0 - ctx)
-        y0 = max(0, by0 - ctx)
-        x1 = min(W, bx1 + ctx)
-        y1 = min(H, by1 + ctx)
+        img_rgb = img_pil.convert("RGB")
+        w, h = img_rgb.size
+        img_rgb_arr = np.array(img_rgb)
+        img_bgr_arr = cv2.cvtColor(img_rgb_arr, cv2.COLOR_RGB2BGR)
 
-        crop = rgb[y0:y1, x0:x1]
-        m = mask[y0:y1, x0:x1]
-        crop_p, m_p = pad_to_multiple(crop, m, mod=8)
-        patches.append(((x0, y0, x1, y1), crop_p, m_p))
+        # 1. Determine Mask: Custom User Brush vs Auto ComicTextDetector
+        is_custom = False
+        boxes_count = 0
+        if custom_mask is not None:
+            mask_arr = np.array(custom_mask.convert("L").resize((w, h), Image.Resampling.NEAREST))
+            if mask_arr.max() > 20:
+                raw_mask = (mask_arr > 20).astype(np.uint8) * 255
+                is_custom = True
+            else:
+                raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+                boxes_count = len(boxes)
+        else:
+            raw_mask, boxes = self.detector.detect_mask(img_bgr_arr)
+            boxes_count = len(boxes)
 
-    return patches
+        # 2. Morphological Elliptical Dilation (eliminates anti-aliasing text stroke fringes)
+        ksize = max(3, dilation_px * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+        dilated_mask = cv2.dilate(raw_mask, kernel)
 
-@spaces.GPU(duration=60)
-def infer_patches_on_gpu(
-    patches_data: List[Tuple[np.ndarray, np.ndarray]],
-    model_name: str = "anime-lama"
-) -> List[np.ndarray]:
-    """Dynamically acquires GPU, runs LaMa neural inpainting, and cleans VRAM."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    cpu_model = model_manager.get_cpu_model(model_name)
+        # 3. Execute IOPaint Inpainting (Full-Page Coherent or Smart Crop)
+        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask)
+        res_rgb = cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB)
 
-    if cpu_model is None:
-        # Emergency Telea fallback
-        return [cv2.inpaint(img, (m > 0).astype(np.uint8) * 255, 3, cv2.INPAINT_TELEA) for img, m in patches_data]
+        cleaned_pil = Image.fromarray(res_rgb)
+        if alpha_channel is not None:
+            cleaned_pil = cleaned_pil.convert("RGBA")
+            cleaned_pil.putalpha(alpha_channel)
 
-    gpu_model = cpu_model.to(device)
-    outputs = []
-    try:
-        for img_p, m_p in patches_data:
-            h, w = img_p.shape[:2]
-            x = torch.from_numpy(img_p).to(device).permute(2, 0, 1).unsqueeze(0).float().div_(255.0)
-            m = torch.from_numpy(m_p).to(device)[None, None].float()
-            m = (m > 0).float()
+        stats = {
+            "model": self.iopaint.current_model_name,
+            "engine": f"IOPaint ({'ZeroGPU' if HAS_ZEROGPU else 'CPU'})",
+            "total_regions": 1 if is_custom else boxes_count,
+            "mode": "custom_brush" if is_custom else "auto",
+            "width": w,
+            "height": h
+        }
 
-            with torch.inference_mode():
-                y = gpu_model(x, m)
+        return cleaned_pil, Image.fromarray(dilated_mask), stats
 
-            res = y[0].permute(1, 2, 0).float().detach().cpu().numpy()
-            if float(res.max()) <= 2.0:
-                res = res * 255.0
-            res_uint8 = np.clip(res, 0, 255).astype(np.uint8)[:h, :w]
-            outputs.append(res_uint8)
-        return outputs
-    finally:
-        gpu_model.to("cpu")
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-        gc.collect()
-
-def run_high_quality_inpainting(
-    image_rgb: np.ndarray,
-    mask_binary: np.ndarray,
-    model_name: str = "anime-lama"
-) -> np.ndarray:
-    """
-    Inpaints image with 1:1 Pixel-Perfect Mask Composite.
-    Pixels outside the mask remain 100% identical to the original image!
-    """
-    H, W = image_rgb.shape[:2]
-    if not mask_binary.any():
-        return image_rgb.copy()
-
-    # Determine if whole-page pass or patch-based pass
-    # For large webtoons or pages > 2200px, use smart context patches
-    if max(H, W) > 2200:
-        planned = plan_patches(image_rgb, mask_binary)
-        if not planned:
-            planned = [((0, 0, W, H), *pad_to_multiple(image_rgb, mask_binary, 8))]
-    else:
-        pad_img, pad_mask = pad_to_multiple(image_rgb, mask_binary, 8)
-        planned = [((0, 0, W, H), pad_img, pad_mask)]
-
-    patches_input = [(p[1], p[2]) for p in planned]
-    inpainted_crops = infer_patches_on_gpu(patches_input, model_name=model_name)
-
-    canvas = image_rgb.copy()
-    for ((x0, y0, x1, y1), _, _), res_crop in zip(planned, inpainted_crops):
-        ch, cw = y1 - y0, x1 - x0
-        clean_crop = res_crop[:ch, :cw]
-
-        # 1:1 Mask Composite (strictly replace only masked pixels)
-        sub_mask = mask_binary[y0:y1, x0:x1] > 0
-        roi = canvas[y0:y1, x0:x1]
-        roi[sub_mask] = clean_crop[sub_mask]
-        canvas[y0:y1, x0:x1] = roi
-
-    return canvas
-
-def process_manga_cleaning(
-    image_pil: Image.Image,
-    custom_mask_pil: Optional[Image.Image] = None,
-    dilation_px: int = 4,
-    model_name: str = "anime-lama"
-) -> Tuple[Image.Image, Image.Image, Dict[str, Any]]:
-    """Master cleaning pipeline combining ComicTextDetector, dilation, and LaMa Inpainting."""
-    t0 = time.perf_counter()
-
-    # Normalize orientation
-    image_pil = ImageOps.exif_transpose(image_pil)
-    has_alpha = image_pil.mode in ("RGBA", "LA")
-    alpha_channel = image_pil.split()[-1] if has_alpha else None
-
-    rgb_pil = image_pil.convert("RGB")
-    rgb_arr = np.array(rgb_pil)
-    h, w = rgb_arr.shape[:2]
-
-    # Generate or extract mask
-    if custom_mask_pil is not None:
-        mask_raw = np.array(custom_mask_pil.convert("L"))
-        if mask_raw.shape[:2] != (h, w):
-            mask_raw = cv2.resize(mask_raw, (w, h), interpolation=cv2.INTER_NEAREST)
-        mask_binary = (mask_raw > 10).astype(np.uint8) * 255
-        boxes = []
-        mode = "brush_mask"
-    else:
-        bgr_arr = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2BGR)
-        mask_binary, boxes = detector_engine.detect_mask(bgr_arr)
-        mode = "auto_detector"
-
-    # Dilate mask to engulf text strokes
-    if dilation_px > 0 and mask_binary.any():
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_px * 2 + 1, dilation_px * 2 + 1))
-        mask_binary = cv2.dilate(mask_binary, kernel)
-
-    # Execute inpainting
-    cleaned_rgb = run_high_quality_inpainting(rgb_arr, mask_binary, model_name=model_name)
-
-    # Reattach alpha if present
-    if alpha_channel is not None:
-        cleaned_pil = Image.fromarray(cleaned_rgb).convert("RGBA")
-        cleaned_pil.putalpha(alpha_channel)
-    else:
-        cleaned_pil = Image.fromarray(cleaned_rgb)
-
-    mask_pil = Image.fromarray(mask_binary, mode="L")
-    inference_ms = int((time.perf_counter() - t0) * 1000)
-
-    stats = {
-        "model": model_name,
-        "engine": f"IOPaint LaMa ({'ZeroGPU' if HAS_ZEROGPU else 'CPU'})",
-        "mode": mode,
-        "total_regions": len(boxes) if boxes else int((mask_binary > 0).any()),
-        "inference_ms": inference_ms,
-        "width": w,
-        "height": h
-    }
-
-    return cleaned_pil, mask_pil, stats
+cleaner_pipeline = MangaCleanerPipeline()
 
 # --------------------------------------------------------------------------------------
-# 6. Base64 & Format Helpers
+# 7. Base64 & Format Helpers
 # --------------------------------------------------------------------------------------
-def pil_to_base64(img: Image.Image, format: str = "PNG") -> str:
-    buffered = io.BytesIO()
-    img.save(buffered, format=format)
-    encoded = base64.b64encode(buffered.getvalue()).decode("utf-8")
-    mime = "image/png" if format.upper() == "PNG" else "image/jpeg"
-    return f"data:{mime};base64,{encoded}"
-
-def base64_to_pil(b64_str: str) -> Image.Image:
+def b64_to_pil(b64_str: str) -> Image.Image:
     if "," in b64_str:
-        b64_str = b64_str.split(",", 1)[1]
-    image_bytes = base64.b64decode(b64_str)
-    return Image.open(io.BytesIO(image_bytes))
+        b64_str = b64_str.split(",")[1]
+    return Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
+
+def pil_to_b64(pil_img: Image.Image, fmt="PNG") -> str:
+    buf = io.BytesIO()
+    pil_img.save(buf, format=fmt)
+    return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
 def extract_image_and_mask_from_editor(editor_data: Any) -> Tuple[Optional[Image.Image], Optional[Image.Image]]:
     if not editor_data:
         return None, None
-
     if isinstance(editor_data, dict):
         bg = editor_data.get("background")
         layers = editor_data.get("layers", [])
-
         if bg is None:
             return None, None
 
@@ -530,7 +547,7 @@ def extract_image_and_mask_from_editor(editor_data: Any) -> Tuple[Optional[Image
     return None, None
 
 # --------------------------------------------------------------------------------------
-# 7. REST API Router (FastAPI)
+# 8. REST API Endpoints (100% matched with Studio App and colab_server.py)
 # --------------------------------------------------------------------------------------
 api_router = APIRouter()
 
@@ -538,12 +555,12 @@ class CleanPagePayload(BaseModel):
     imageBase64: str
     maskBase64: Optional[str] = None
     dilationPx: Optional[int] = 4
-    modelName: Optional[str] = "anime-lama"
+    modelName: Optional[str] = None
 
 class InpaintPayload(BaseModel):
     imageBase64: str
     maskBase64: str
-    modelName: Optional[str] = "anime-lama"
+    modelName: Optional[str] = None
 
 class DetectPayload(BaseModel):
     imageBase64: str
@@ -553,93 +570,86 @@ class SwitchModelPayload(BaseModel):
 
 @api_router.get("/health")
 @api_router.get("/api/v1/health")
-def health_check():
+def health():
     device_name = "Nvidia A100 (ZeroGPU)" if HAS_ZEROGPU else ("CUDA" if torch.cuda.is_available() else "CPU")
     return {
         "status": "online",
-        "online": True,
         "device": device_name,
         "gpu": device_name,
-        "gpu_name": device_name,
-        "engine": "IOPaint Anime-LaMa & ComicTextDetector",
-        "current_model": model_manager.active_model_name,
-        "zerogpu": HAS_ZEROGPU,
+        "engine": "IOPaint (Lama Cleaner) & ComicTextDetector",
+        "current_model": cleaner_pipeline.iopaint.current_model_name,
+        "iopaint_ready": cleaner_pipeline.iopaint.ready,
+        "detector_ready": cleaner_pipeline.detector.ready,
         "available_models": ["anime-lama", "lama"]
     }
 
 @api_router.post("/api/clean_page")
 async def api_clean_page(req: CleanPagePayload):
     try:
-        img_pil = base64_to_pil(req.imageBase64)
-        mask_pil = base64_to_pil(req.maskBase64).convert("L") if req.maskBase64 else None
-        model = req.modelName or "anime-lama"
-
-        cleaned_pil, mask_res_pil, stats = await run_in_threadpool(
-            process_manga_cleaning,
-            image_pil=img_pil,
-            custom_mask_pil=mask_pil,
+        img = b64_to_pil(req.imageBase64)
+        custom_mask = b64_to_pil(req.maskBase64).convert("L") if req.maskBase64 else None
+        cleaned_pil, mask_pil, stats = await run_in_threadpool(
+            cleaner_pipeline.clean_image,
+            img_pil=img,
             dilation_px=req.dilationPx or 4,
-            model_name=model
+            custom_mask=custom_mask,
+            model_name=req.modelName
         )
-
         return {
             "success": True,
-            "cleanedImageBase64": pil_to_base64(cleaned_pil),
-            "maskBase64": pil_to_base64(mask_res_pil),
+            "cleanedImageBase64": pil_to_b64(cleaned_pil),
+            "maskBase64": pil_to_b64(mask_pil),
             "stats": stats
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi xử lý trang: {str(e)}")
+        print(f"Clean Page Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/api/inpaint")
 async def api_inpaint(req: InpaintPayload):
     try:
-        img_pil = base64_to_pil(req.imageBase64)
-        mask_pil = base64_to_pil(req.maskBase64).convert("L")
-        model = req.modelName or "anime-lama"
-
-        cleaned_pil, mask_res_pil, stats = await run_in_threadpool(
-            process_manga_cleaning,
-            image_pil=img_pil,
-            custom_mask_pil=mask_pil,
+        img = b64_to_pil(req.imageBase64)
+        custom_mask = b64_to_pil(req.maskBase64).convert("L")
+        cleaned_pil, mask_pil, stats = await run_in_threadpool(
+            cleaner_pipeline.clean_image,
+            img_pil=img,
             dilation_px=4,
-            model_name=model
+            custom_mask=custom_mask,
+            model_name=req.modelName
         )
-
         return {
             "success": True,
-            "cleanedImageBase64": pil_to_base64(cleaned_pil),
-            "maskBase64": pil_to_base64(mask_res_pil),
+            "cleanedImageBase64": pil_to_b64(cleaned_pil),
+            "maskBase64": pil_to_b64(mask_pil),
             "stats": stats
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi inpainting: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/api/detect")
 async def api_detect(req: DetectPayload):
     try:
-        img_pil = base64_to_pil(req.imageBase64)
-        rgb_arr = np.array(img_pil.convert("RGB"))
+        img_pil = b64_to_pil(req.imageBase64)
+        rgb_arr = np.array(img_pil)
         bgr_arr = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2BGR)
-
-        mask_arr, boxes = detector_engine.detect_mask(bgr_arr)
+        mask_arr, boxes = cleaner_pipeline.detector.detect_mask(bgr_arr)
         mask_pil = Image.fromarray(mask_arr, mode="L")
-
         return {
             "success": True,
-            "maskBase64": pil_to_base64(mask_pil),
+            "maskBase64": pil_to_b64(mask_pil),
             "boxes": boxes,
             "count": len(boxes)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi nhận diện text: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/api/switch_model")
 def api_switch_model(req: SwitchModelPayload):
-    model = model_manager.get_cpu_model(req.modelName)
-    if model is None:
-        raise HTTPException(status_code=400, detail=f"Model '{req.modelName}' không khả dụng.")
-    return {"success": True, "active_model": model_manager.active_model_name}
+    success = cleaner_pipeline.iopaint.load_model(req.modelName)
+    return {
+        "success": success,
+        "current_model": cleaner_pipeline.iopaint.current_model_name
+    }
 
 @api_router.post("/api/v1/inpaint")
 async def api_v1_inpaint(
@@ -659,10 +669,10 @@ async def api_v1_inpaint(
                 mask_pil = Image.open(io.BytesIO(mask_bytes)).convert("L")
 
         cleaned_pil, _, _ = await run_in_threadpool(
-            process_manga_cleaning,
-            image_pil=img_pil,
-            custom_mask_pil=mask_pil,
+            cleaner_pipeline.clean_image,
+            img_pil=img_pil,
             dilation_px=dilation,
+            custom_mask=mask_pil,
             model_name=model_name
         )
 
@@ -673,7 +683,7 @@ async def api_v1_inpaint(
         raise HTTPException(status_code=500, detail=f"API error: {str(e)}")
 
 # --------------------------------------------------------------------------------------
-# 8. Gradio Mobile-First Web UI
+# 9. Gradio Mobile-First Web UI
 # --------------------------------------------------------------------------------------
 CUSTOM_CSS = """
 .gradio-container {
@@ -696,7 +706,7 @@ def create_gradio_ui() -> gr.Blocks:
         gr.Markdown(
             """
             # 🎨 Manga Text Cleaner (Nvidia A100 ZeroGPU)
-            **Phục hồi tranh & xóa chữ manga/manhwa siêu sạch bằng Anime-Manga Big-LaMa & ComicTextDetector.**
+            **Phục hồi tranh & xóa chữ manga/manhwa siêu sạch bằng Anime-Manga Big-LaMa & ComicTextDetector (IOPaint Engine).**
             """
         )
 
@@ -728,10 +738,10 @@ def create_gradio_ui() -> gr.Blocks:
                     bg_pil, custom_mask_pil = extract_image_and_mask_from_editor(editor_data)
                     if bg_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
-                    result_pil, _, stats = process_manga_cleaning(
-                        image_pil=bg_pil,
-                        custom_mask_pil=custom_mask_pil,
+                    result_pil, _, stats = cleaner_pipeline.clean_image(
+                        img_pil=bg_pil,
                         dilation_px=int(dilation_val),
+                        custom_mask=custom_mask_pil,
                         model_name=model_name
                     )
                     return result_pil, stats
@@ -763,10 +773,10 @@ def create_gradio_ui() -> gr.Blocks:
                 def on_run_auto_clean(img_pil, model_name, dilation_val):
                     if img_pil is None:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
-                    result_pil, mask_res_pil, stats = process_manga_cleaning(
-                        image_pil=img_pil,
-                        custom_mask_pil=None,
+                    result_pil, mask_res_pil, stats = cleaner_pipeline.clean_image(
+                        img_pil=img_pil,
                         dilation_px=int(dilation_val),
+                        custom_mask=None,
                         model_name=model_name
                     )
                     return result_pil, mask_res_pil, stats
@@ -796,7 +806,7 @@ def create_gradio_ui() -> gr.Blocks:
     return demo
 
 # --------------------------------------------------------------------------------------
-# 9. Server Bootstrap: Native Gradio Launch + Embedded FastAPI Router
+# 10. Server Bootstrap: Native Gradio Launch + Embedded FastAPI Router
 # --------------------------------------------------------------------------------------
 demo = create_gradio_ui()
 
@@ -804,7 +814,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     print(f"🌟 Launching Manga Text Cleaner on http://0.0.0.0:{port} ...")
 
-    # Native Gradio launch with prevent_thread_lock to mount REST API routes on its live FastAPI instance
     app, local_url, share_url = demo.launch(
         server_name="0.0.0.0",
         server_port=port,
@@ -812,10 +821,8 @@ if __name__ == "__main__":
         show_error=True
     )
 
-    # Attach all custom REST API endpoints to the live server
     if hasattr(app, "include_router"):
         app.include_router(api_router)
         print("✅ REST API endpoints (/health, /api/clean_page, /api/inpaint, /api/v1/inpaint) successfully attached!")
 
-    # Keep server running
     demo.block_thread()
