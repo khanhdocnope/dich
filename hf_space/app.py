@@ -537,8 +537,9 @@ class MangaCleanerPipeline:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
         dilated_mask = cv2.dilate(raw_mask, kernel)
 
-        # 3. Execute IOPaint Inpainting (Full-Page Coherent or Smart Crop)
-        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask, force_cpu=force_cpu)
+        # 3. Execute IOPaint Inpainting (Smart Crop for manual brush or large images to save 90%+ RAM)
+        chosen_strategy = HDStrategy.CROP if (is_custom or max(h, w) > 2500) else HDStrategy.ORIGINAL
+        res_bgr = self.iopaint.inpaint(img_rgb_arr, dilated_mask, hd_strategy=chosen_strategy, force_cpu=force_cpu)
         res_rgb = cv2.cvtColor(res_bgr, cv2.COLOR_BGR2RGB)
 
         cleaned_pil = Image.fromarray(res_rgb)
@@ -554,6 +555,7 @@ class MangaCleanerPipeline:
             "det_threshold": float(det_threshold),
             "total_regions": 1 if is_custom else boxes_count,
             "mode": "custom_brush" if is_custom else "auto",
+            "strategy": "smart_crop (Tiết kiệm >90% RAM)" if chosen_strategy == HDStrategy.CROP else "full_page",
             "width": w,
             "height": h
         }
