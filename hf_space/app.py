@@ -948,14 +948,41 @@ def create_gradio_ui() -> gr.Blocks:
         )
 
         with gr.Tabs():
-            with gr.TabItem("🖌️ Quẹt Cọ Xóa Nền (Interactive Canvas)"):
+            with gr.TabItem("🖌️ Quẹt Cọ Xóa Nền (Quy Trình 2 Bước - Tối Ưu RAM)"):
+                tab1_orig_path_state = gr.State(None)
+
                 with gr.Row():
                     with gr.Column(scale=6):
+                        gr.Markdown(
+                            """
+                            #### 📥 Bước 1: Tải Ảnh Gốc Lên Server (Giữ Trọn 100% Độ Phân Giải 1:1)
+                            *Ảnh gốc được lưu trực tiếp trên server. Hệ thống tự động tạo bản vẽ nhẹ (Proxy) đưa xuống Bước 2 để tiết kiệm hơn 90% RAM trình duyệt máy khách.*
+                            """
+                        )
+                        tab1_original_img = gr.Image(
+                            type="filepath",
+                            label="Tải ảnh gốc (Độ nét cao 1:1)",
+                            sources=["upload", "clipboard"]
+                        )
+                        with gr.Row():
+                            btn_load_proxy = gr.Button("⚡ Nạp Sang Khung Cọ Vẽ Nhẹ", variant="secondary")
+                            tab1_max_proxy_slider = gr.Slider(
+                                800, 2000, value=1280, step=80,
+                                label="Kích thước tối đa khung vẽ (px - mặc định 1280px vẽ siêu mượt)"
+                            )
+                        tab1_proxy_info = gr.Markdown("ℹ️ *Hãy tải ảnh gốc ở Bước 1 để bắt đầu.*")
+
+                        gr.Markdown(
+                            """
+                            #### 🖌️ Bước 2: Quẹt Cọ Chọn Vùng Xóa (Siêu Mượt, Không Lag Máy Khách)
+                            *Vẽ bôi đỏ các vùng chữ thoại cần xóa. Khi bấm chạy, AI sẽ tự động phóng to mask và xóa trực tiếp trên file gốc 1:1.*
+                            """
+                        )
                         editor_input = gr.ImageEditor(
                             type="numpy",
-                            label="Khung vẽ cọ (Dùng ngón tay/chuột bôi vùng chữ)",
-                            brush=gr.Brush(colors=["#ff0000"], default_color="#ff0000", default_size=28),
-                            eraser=gr.Eraser(default_size=28),
+                            label="Khung vẽ cọ nhẹ (Dùng ngón tay/chuột bôi đỏ vùng chữ cần xóa)",
+                            brush=gr.Brush(colors=["#ff0000"], default_color="#ff0000", default_size=24),
+                            eraser=gr.Eraser(default_size=24),
                             elem_classes="mobile-canvas-container"
                         )
                         with gr.Accordion("⚙️ Tùy chọn", open=False):
@@ -971,28 +998,89 @@ def create_gradio_ui() -> gr.Blocks:
                             )
                             dilation_slider_tab1 = gr.Slider(0, 50, value=6, step=1, label="Độ mở rộng viền nét vẽ (Dilation px)")
                             quality_slider_tab1 = gr.Slider(80, 100, value=95, step=1, label="Chất lượng JPEG (95: nét tối đa 4:4:4)")
-                        btn_inpaint = gr.Button("🚀 AI Xóa Nền Vùng Chọn (ZeroGPU)", variant="primary", elem_classes="action-btn")
+                        btn_inpaint = gr.Button("🚀 AI Xóa Vùng Chọn Trên Ảnh Gốc (ZeroGPU)", variant="primary", elem_classes="action-btn")
 
                     with gr.Column(scale=6):
-                        output_image_tab1 = gr.Image(label="Tranh đã phục hồi (1:1 Pixel-Perfect)", type="pil", interactive=False)
+                        output_image_tab1 = gr.Image(label="Tranh đã phục hồi (1:1 Pixel-Perfect Nét Gốc)", type="pil", interactive=False)
                         with gr.Row():
                             btn_download_tab1 = gr.DownloadButton("📥 Tải Ảnh Đầy Đủ (.JPG Siêu Nét 4:4:4)", variant="secondary", size="lg", visible=False, elem_classes="action-btn")
                         download_file_tab1 = gr.File(label="Tệp ảnh .JPG kết quả (Tải trực tiếp tránh bị WebP)", interactive=False, visible=False)
                         output_stats_tab1 = gr.JSON(label="Thông số xử lý")
 
-                def on_run_interactive_inpaint(editor_data, model_name, dilation_val, device_mode_val, jpg_quality_val=95):
+                def on_prepare_proxy(img_path: str, max_dim_val: int = 1280):
+                    if not img_path or not os.path.exists(img_path):
+                        raise gr.Error("Vui lòng tải ảnh gốc ở Bước 1 trước!")
+                    
+                    orig_pil = Image.open(img_path)
+                    orig_pil = ImageOps.exif_transpose(orig_pil)
+                    orig_w, orig_h = orig_pil.size
+                    
+                    max_side = max(orig_w, orig_h)
+                    max_dim_val = int(max_dim_val or 1280)
+
+                    if max_side > max_dim_val:
+                        scale = float(max_dim_val) / float(max_side)
+                        proxy_w = max(1, int(round(orig_w * scale)))
+                        proxy_h = max(1, int(round(orig_h * scale)))
+                        proxy_pil = orig_pil.resize((proxy_w, proxy_h), Image.Resampling.LANCZOS)
+                        ram_saved = round((1.0 - (proxy_w * proxy_h) / (orig_w * orig_h)) * 100.0, 1)
+                    else:
+                        proxy_w, proxy_h = orig_w, orig_h
+                        proxy_pil = orig_pil.copy()
+                        ram_saved = 0.0
+
+                    proxy_arr = np.array(proxy_pil.convert("RGB"))
+                    editor_data = {
+                        "background": proxy_arr,
+                        "layers": [],
+                        "composite": proxy_arr
+                    }
+
+                    info_msg = (
+                        f"✅ **Đã nạp khung vẽ nhẹ thành công!**\n"
+                        f"- 📏 **Ảnh gốc trên server:** `{orig_w} × {orig_h} px` (1:1 chuẩn nét gốc)\n"
+                        f"- 🖌️ **Khung vẽ nhẹ (Proxy):** `{proxy_w} × {proxy_h} px`\n"
+                        f"- 🚀 **Tiết kiệm RAM trình duyệt:** `{ram_saved}%` (Trải nghiệm vẽ cọ cực mượt, không giật lag)"
+                    )
+
+                    return editor_data, img_path, info_msg
+
+                def on_run_interactive_inpaint(editor_data, orig_img_path, model_name, dilation_val, device_mode_val, jpg_quality_val=95):
                     bg_pil, custom_mask_pil = extract_image_and_mask_from_editor(editor_data)
-                    if bg_pil is None:
+                    if bg_pil is None and not orig_img_path:
                         raise gr.Error("Vui lòng tải một trang truyện lên trước!")
+                    if custom_mask_pil is None:
+                        raise gr.Error("Vui lòng dùng cọ bôi đỏ vùng chữ cần xóa trên khung vẽ!")
+
+                    if orig_img_path and os.path.exists(orig_img_path):
+                        orig_pil = Image.open(orig_img_path)
+                        orig_pil = ImageOps.exif_transpose(orig_pil)
+                        orig_w, orig_h = orig_pil.size
+                        
+                        # Scale proxy mask to 1:1 original dimensions
+                        mask_arr = np.array(custom_mask_pil.convert("L"))
+                        scaled_mask_arr = cv2.resize(mask_arr, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
+                        full_mask_pil = Image.fromarray(scaled_mask_arr, mode="L")
+                        target_pil = orig_pil
+
+                        orig_basename = os.path.basename(orig_img_path)
+                        name_no_ext, _ = os.path.splitext(orig_basename)
+                        if not name_no_ext or name_no_ext.lower() in ("image", "input", "tmp"):
+                            clean_filename = f"inpaint_clean_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+                        else:
+                            clean_filename = f"{name_no_ext}_clean.jpg"
+                    else:
+                        target_pil = bg_pil
+                        full_mask_pil = custom_mask_pil
+                        clean_filename = f"inpaint_clean_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+
                     result_pil, _, stats = cleaner_pipeline.clean_image(
-                        img_pil=bg_pil,
+                        img_pil=target_pil,
                         dilation_px=int(dilation_val),
-                        custom_mask=custom_mask_pil,
+                        custom_mask=full_mask_pil,
                         model_name=model_name,
                         force_cpu=(device_mode_val == "cpu")
                     )
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    clean_filename = f"inpaint_clean_{timestamp}.jpg"
                     clean_filepath = os.path.join(OUTPUT_STORAGE_DIR, clean_filename)
                     jpg_bytes = save_pil_to_high_quality_jpg_bytes(result_pil, quality=int(jpg_quality_val))
                     with open(clean_filepath, "wb") as f:
@@ -1000,12 +1088,34 @@ def create_gradio_ui() -> gr.Blocks:
 
                     stats["saved_jpg"] = clean_filename
                     stats["format"] = f"JPEG (Quality {int(jpg_quality_val)}, Subsampling 4:4:4)"
+                    stats["original_resolution"] = f"{target_pil.size[0]}x{target_pil.size[1]}"
+                    if orig_img_path:
+                        stats["proxy_canvas"] = f"{custom_mask_pil.size[0]}x{custom_mask_pil.size[1]}"
+                        stats["pipeline_mode"] = "2-Step RAM Optimized Proxy Inpainting"
 
                     return result_pil, stats, gr.update(value=clean_filepath, visible=True), gr.update(value=clean_filepath, visible=True)
 
+                tab1_original_img.upload(
+                    fn=on_prepare_proxy,
+                    inputs=[tab1_original_img, tab1_max_proxy_slider],
+                    outputs=[editor_input, tab1_orig_path_state, tab1_proxy_info]
+                )
+
+                btn_load_proxy.click(
+                    fn=on_prepare_proxy,
+                    inputs=[tab1_original_img, tab1_max_proxy_slider],
+                    outputs=[editor_input, tab1_orig_path_state, tab1_proxy_info]
+                )
+
+                tab1_original_img.clear(
+                    fn=lambda: (None, None, "ℹ️ *Hãy tải ảnh gốc ở Bước 1 để bắt đầu.*"),
+                    inputs=[],
+                    outputs=[editor_input, tab1_orig_path_state, tab1_proxy_info]
+                )
+
                 btn_inpaint.click(
                     fn=on_run_interactive_inpaint,
-                    inputs=[editor_input, model_choice_tab1, dilation_slider_tab1, device_choice_tab1, quality_slider_tab1],
+                    inputs=[editor_input, tab1_orig_path_state, model_choice_tab1, dilation_slider_tab1, device_choice_tab1, quality_slider_tab1],
                     outputs=[output_image_tab1, output_stats_tab1, btn_download_tab1, download_file_tab1]
                 )
 
