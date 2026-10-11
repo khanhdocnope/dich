@@ -78,7 +78,9 @@ jobs:
         run: npm run build
 
       - name: Build Windows Executables
-        run: npx electron-builder --win nsis portable
+        run: npx electron-builder --win nsis portable --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare Windows Executables
         shell: pwsh

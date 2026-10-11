@@ -9,11 +9,12 @@
     "client": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "build:win": "npm run build && electron-builder --win nsis portable"
+    "build:win": "npm run build && electron-builder --win nsis portable --publish never"
   },
   "build": {
     "appId": "com.khanhdocnope.mangastudio",
     "productName": "Manga Translator Studio",
+    "publish": null,
     "directories": {
       "output": "release"
     },
