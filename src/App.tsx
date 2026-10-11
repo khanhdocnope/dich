@@ -29,6 +29,7 @@ import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revok
 import { inpaintImageWithLaMa, translateBubbles, cleanPageWithAI, detectTextRegions } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
 import { triggerSelectionHaptic } from './services/haptics';
+import { UiLanguage, getSavedLanguage, saveLanguage, DICTIONARY } from './services/i18n';
 
 export const App: React.FC = () => {
   // Application Data States
@@ -38,6 +39,8 @@ export const App: React.FC = () => {
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [selectedBubbleId, setSelectedBubbleId] = useState<string | null>(null);
   const [cleanedImageBase64, setCleanedImageBase64] = useState<string | null>(null);
+  const [uiLang, setUiLang] = useState<UiLanguage>(() => getSavedLanguage());
+  const t = DICTIONARY[uiLang];
 
   // Status & Progress States
   const [isLoadingImages, setIsLoadingImages] = useState<boolean>(false);
@@ -583,36 +586,13 @@ export const App: React.FC = () => {
       });
 
       if (res.success && res.cleanedImageBase64) {
-        let updatedBubbles = [...bubbles];
-        try {
-          const detectRes = await detectTextRegions(colabConfig.serverUrl, sourceImg);
-          if (detectRes.success && detectRes.boxes && detectRes.boxes.length > 0) {
-            const newBubbles: Bubble[] = detectRes.boxes.map((box, idx) => ({
-              id: `bubble_${Date.now()}_${idx}`,
-              x: box.x,
-              y: box.y,
-              width: box.width,
-              height: box.height,
-              originalText: '',
-              translatedText: 'Nhập chữ dịch...',
-              style: { ...defaultTextStyle },
-              isInpainted: true,
-            }));
-            updatedBubbles = newBubbles;
-            setBubbles(newBubbles);
-          }
-        } catch (detErr) {
-          console.warn('Auto detect boxes notice:', detErr);
-        }
-
-        pushHistory(res.cleanedImageBase64, updatedBubbles);
+        pushHistory(res.cleanedImageBase64, bubbles);
         setCleanedImageBase64(res.cleanedImageBase64);
         if (selectedFilename) {
-          await saveProjectMetadata(selectedFilename, updatedBubbles, res.cleanedImageBase64);
+          await saveProjectMetadata(selectedFilename, bubbles, res.cleanedImageBase64);
         }
         const regions = res.stats?.total_regions ?? (res.stats?.regions ?? (res.stats?.lama ?? 0));
-        const bubbleNotice = updatedBubbles.length > 0 ? ` và đã tạo ${updatedBubbles.length} ô thoại dịch` : '';
-        showToast('success', `Đã làm sạch trang bằng AI (${regions} vùng chữ)${bubbleNotice}!`, 'Xóa Hoàn Tất');
+        showToast('success', `Đã quét sạch chữ toàn trang bằng AI (${regions} vùng chữ)!`, 'Xóa Hoàn Tất');
       } else {
         showToast('error', `Xử lý thất bại: ${res.error || 'Vui lòng kiểm tra lại Colab Server.'}`, 'Lỗi Xóa Trang');
       }
@@ -667,12 +647,13 @@ export const App: React.FC = () => {
 
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-graphite-base text-ink-paper antialiased select-none font-body-md">
       {/* Top App Header */}
       <Header
         currentFilename={selectedFilename}
         colabConfig={colabConfig}
         outputFolderName={outputConfig.customFolderName}
+        uiLang={uiLang}
         onOpenColabModal={() => setIsColabModalOpen(true)}
         onOpenBatchModal={() => setIsBatchModalOpen(true)}
         onOpenOutputModal={() => setIsOutputModalOpen(true)}
@@ -684,6 +665,69 @@ export const App: React.FC = () => {
         isProcessing={isProcessing}
         processingStatus={processingStatus}
       />
+
+      {/* Mobile Sub-Header Telemetry Bar (From Moji Mobile Viewport Spec) */}
+      <div className="mobile-only w-full bg-graphite-base px-3 py-1 flex items-center justify-between border-b border-whisper z-30 text-[11px]">
+        {/* AI Server & Gemini API Key Quick Settings Button */}
+        <button
+          onClick={() => {
+            triggerSelectionHaptic();
+            setIsColabModalOpen(true);
+          }}
+          className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-container-high/80 border border-whisper hover:bg-graphite-subtle active:scale-95 transition-all text-left"
+          title="Nhấp để nhập Link Google Colab / Hugging Face & Gemini API Key"
+        >
+          <span className="relative flex h-2 w-2 shrink-0">
+            {colabConfig.connected ? (
+              <>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </>
+            ) : (
+              <>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#fbabfe] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#fbabfe]"></span>
+              </>
+            )}
+          </span>
+          <span className="font-mono text-ink-paper text-[10.5px] font-medium truncate max-w-[150px]">
+            {colabConfig.connected ? (colabConfig.gpuName || 'GPU Cloud • 16ms') : '⚡ Cài Đặt AI & API Key'}
+          </span>
+          <span className="material-symbols-outlined text-primary text-[13px] shrink-0">tune</span>
+        </button>
+
+        {/* Page Indicator & Quick Undo/Redo */}
+        <div className="flex items-center gap-2 text-[#8E8E93]">
+          {selectedFilename && (
+            <span className="font-mono text-[#F5F5F7] text-[10px] font-medium">
+              {(() => {
+                const idx = images.findIndex((img) => img.filename === selectedFilename);
+                const curr = idx >= 0 ? (idx + 1 < 10 ? `0${idx + 1}` : idx + 1) : '01';
+                const total = images.length < 10 ? `0${images.length}` : images.length;
+                return `P.${curr}/${total}`;
+              })()}
+            </span>
+          )}
+          <div className="flex items-center border-l border-white/10 pl-1.5 gap-1">
+            <button
+              onClick={handleUndo}
+              disabled={historyIndex <= 0}
+              className="p-0.5 hover:text-[#F5F5F7] active:scale-95 disabled:opacity-30"
+              title="Undo"
+            >
+              <span className="material-symbols-outlined text-[15px]">undo</span>
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={historyIndex >= history.length - 1}
+              className="p-0.5 hover:text-[#F5F5F7] active:scale-95 disabled:opacity-30"
+              title="Redo"
+            >
+              <span className="material-symbols-outlined text-[15px]">redo</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Main Studio Workspace */}
       <div ref={workspaceContainerRef} className="flex-1 flex overflow-hidden relative">
@@ -718,6 +762,7 @@ export const App: React.FC = () => {
           width={`${layoutRatios.left}%`}
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={setIsSidebarCollapsed}
+          uiLang={uiLang}
         />
 
         {/* Left Splitter */}
@@ -799,10 +844,11 @@ export const App: React.FC = () => {
           width={`${layoutRatios.right}%`}
           isCollapsed={isInspectorCollapsed}
           onToggleCollapse={setIsInspectorCollapsed}
+          uiLang={uiLang}
         />
       </div>
 
-      {/* Mobile Bottom Navigation Bar */}
+      {/* Mobile Bottom Navigation Bar (Serene Bento Glass Mobile) */}
       <nav className="mobile-bottom-nav mobile-only">
         <button
           onClick={() => {
@@ -812,8 +858,8 @@ export const App: React.FC = () => {
           }}
           className={`mobile-nav-btn ${isMobileSidebarOpen ? 'active' : ''}`}
         >
-          <Images className="w-4 h-4 text-indigo-400" />
-          <span>Trang ({images.length})</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>photo_library</span>
+          <span>{t.pagesCount} ({images.length})</span>
         </button>
 
         <button
@@ -821,10 +867,19 @@ export const App: React.FC = () => {
             triggerSelectionHaptic();
             setIsColabModalOpen(true);
           }}
-          className="mobile-nav-btn"
+          className={`mobile-nav-btn ${colabConfig.connected ? 'active' : ''}`}
+          title="Cài đặt đường dẫn Google Colab & API Key"
         >
-          <Sparkles className={`w-4 h-4 ${colabConfig.connected ? 'text-emerald-400' : 'text-amber-400'}`} />
-          <span>{colabConfig.connected ? 'AI Sẵn Sàng' : 'Kết Nối AI'}</span>
+          <span 
+            className="material-symbols-outlined" 
+            style={{ 
+              fontSize: '20px', 
+              color: colabConfig.connected ? '#34d399' : '#fbabfe' 
+            }}
+          >
+            {colabConfig.connected ? 'smart_toy' : 'tune'}
+          </span>
+          <span>{colabConfig.connected ? t.aiOnline : t.linkAiKey}</span>
         </button>
 
         <button
@@ -835,8 +890,8 @@ export const App: React.FC = () => {
           }}
           className={`mobile-nav-btn ${isMobileInspectorOpen ? 'active' : ''}`}
         >
-          <Type className="w-4 h-4 text-purple-400" />
-          <span>Ô Thoại ({bubbles.length})</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>chat_bubble</span>
+          <span>{t.bubblesCountLabel} ({bubbles.length})</span>
         </button>
 
         <button
@@ -847,8 +902,8 @@ export const App: React.FC = () => {
           disabled={!selectedFilename || isProcessing}
           className="mobile-nav-btn primary"
         >
-          <Download className="w-4 h-4 text-white" />
-          <span>{isProcessing ? 'Đang xuất...' : 'Xuất Ảnh'}</span>
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>ios_share</span>
+          <span>{isProcessing ? t.exporting : (uiLang === 'en' ? 'Export' : 'Xuất')}</span>
         </button>
       </nav>
 
@@ -879,6 +934,11 @@ export const App: React.FC = () => {
         images={images}
         outputConfig={outputConfig}
         onSaveConfig={handleSaveOutputConfig}
+        uiLang={uiLang}
+        onChangeUiLang={(lang) => {
+          setUiLang(lang);
+          saveLanguage(lang);
+        }}
       />
 
       {/* Global Toast Notification Container */}

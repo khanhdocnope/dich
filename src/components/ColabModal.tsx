@@ -84,35 +84,35 @@ export const ColabModal: React.FC<ColabModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 select-none">
-      <div className="w-full max-w-xl glass-panel rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 select-none">
+      <div className="w-full max-w-xl bg-[#161618] rounded-2xl border border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+        <div className="p-4 border-b border-[rgba(255,255,255,0.08)] flex items-center justify-between bg-[#131315]">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
+            <div className="p-2 rounded-xl bg-[#2E103A] text-[#fbabfe] border border-[#611f69]">
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-100">
+              <h3 className="font-bold text-sm text-[#F5F5F7]">
                 Kết Nối AI Cloud (Hugging Face ZeroGPU / Google Colab)
               </h3>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#8E8E93]">
                 Xóa chữ sạch hoàn hảo bằng mô hình LaMa Inpainting trên Nvidia A100 / T4 GPU
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            className="p-1.5 rounded-lg text-[#8E8E93] hover:text-[#F5F5F7] hover:bg-[#222226]"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Body */}
-        <div className="p-5 space-y-4 overflow-y-auto">
+        <div className="p-5 space-y-4 overflow-y-auto custom-scroll">
           {/* Instructions Guide */}
-          <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-800/40 text-xs space-y-2.5 text-indigo-200">
+          <div className="p-3.5 rounded-xl bg-[#1b1b1d] border border-[rgba(255,255,255,0.08)] text-xs space-y-2.5 text-[#F5F5F7]">
             <div className="font-semibold text-indigo-300 flex items-center space-x-1.5">
               <Sparkles className="w-4 h-4 text-indigo-400" />
               <span>Hai phương thức chạy AI Cloud miễn phí:</span>
@@ -211,16 +211,16 @@ export const ColabModal: React.FC<ColabModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/60 flex items-center justify-end space-x-2">
+        <div className="p-4 border-t border-[rgba(255,255,255,0.08)] bg-[#131315] flex items-center justify-end space-x-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all"
+            className="px-4 py-2 rounded-full text-xs font-medium text-[#8E8E93] hover:text-[#F5F5F7] hover:bg-[#222226] transition-all"
           >
             Đóng
           </button>
           <button
             onClick={handleSave}
-            className="px-5 py-2 rounded-xl text-xs font-semibold btn-primary text-white transition-all shadow-md"
+            className="px-5 py-2 rounded-full text-xs font-semibold bg-[#611f69] hover:bg-[#73257D] text-white border border-white/20 transition-all shadow-md active:scale-95"
           >
             Lưu Cấu Hình
           </button>

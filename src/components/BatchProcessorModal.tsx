@@ -102,27 +102,27 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
   const progressPercent = images.length > 0 ? Math.round((processedCount / images.length) * 100) : 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 select-none">
-      <div className="w-full max-w-2xl glass-panel rounded-2xl border border-slate-700 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4 select-none">
+      <div className="w-full max-w-2xl bg-[#161618] rounded-2xl border border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+        <div className="p-4 border-b border-[rgba(255,255,255,0.08)] flex items-center justify-between bg-[#131315]">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-purple-600/20 text-purple-400 border border-purple-500/30">
+            <div className="p-2 rounded-xl bg-[#2E103A] text-[#fbabfe] border border-[#611f69]">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-slate-100">
+              <h3 className="font-bold text-sm text-[#F5F5F7]">
                 Xử Lý Hàng Loạt (Batch Auto-Translator)
               </h3>
-              <p className="text-xs text-slate-400">
-                Tự động dịch toàn bộ {images.length} trang từ <code className="text-slate-300">raw materials</code> ra <code className="text-indigo-400">test-case</code>
+              <p className="text-xs text-[#8E8E93]">
+                Tự động dịch toàn bộ {images.length} trang từ <code className="text-[#F5F5F7]">raw materials</code> ra <code className="text-[#9dcaff]">thư mục xuất</code>
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={isRunning}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+            className="p-1.5 rounded-lg text-[#8E8E93] hover:text-[#F5F5F7] hover:bg-[#222226] disabled:opacity-50"
           >
             <X className="w-4 h-4" />
           </button>
@@ -231,7 +231,7 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
             {processedCount > 0 && !isRunning && (
               <button
                 onClick={() => exportImagesAsZip(images, `${outputFolderName.replace(/[\/\\:]/g, '_')}_Translated.zip`)}
-                className="px-3 py-2 rounded-xl text-xs font-semibold bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 flex items-center space-x-1.5 transition-all"
+                className="px-3.5 py-2 rounded-full text-xs font-semibold bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white border border-amber-500/40 flex items-center space-x-1.5 transition-all"
                 title="Tải toàn bộ kết quả về dạng file .ZIP"
               >
                 <FileArchive className="w-3.5 h-3.5" />
@@ -242,14 +242,14 @@ export const BatchProcessorModal: React.FC<BatchProcessorModalProps> = ({
             <button
               onClick={onClose}
               disabled={isRunning}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+              className="px-4 py-2 rounded-full text-xs font-medium text-[#8E8E93] hover:text-[#F5F5F7] hover:bg-[#222226] disabled:opacity-50 transition-all"
             >
               Đóng
             </button>
             <button
               onClick={handleStartBatch}
               disabled={isRunning || images.length === 0}
-              className="px-5 py-2 rounded-xl text-xs font-semibold btn-primary text-white flex items-center space-x-1.5 disabled:opacity-50"
+              className="px-5 py-2 rounded-full text-xs font-semibold bg-[#611f69] hover:bg-[#73257D] text-white border border-white/20 flex items-center space-x-1.5 disabled:opacity-50 transition-all active:scale-95 shadow-md"
             >
               {isRunning ? (
                 <>

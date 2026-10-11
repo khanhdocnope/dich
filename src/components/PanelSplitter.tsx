@@ -99,7 +99,7 @@ export const PanelSplitter: React.FC<PanelSplitterProps> = ({
 
       {/* Grip Handle Center Pill */}
       <div className="splitter-grip-pill absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-35 flex items-center justify-center pointer-events-none transition-all duration-200">
-        <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-300 transition-colors" />
+        <GripVertical className="w-3.5 h-3.5 text-zinc-500 group-hover:text-[#fbabfe] transition-colors" />
       </div>
 
       {/* Optional Mini Quick-Collapse Toggle Button */}
@@ -110,7 +110,7 @@ export const PanelSplitter: React.FC<PanelSplitterProps> = ({
             e.stopPropagation();
             onToggleCollapse();
           }}
-          className="splitter-collapse-btn absolute top-3 left-1/2 -translate-x-1/2 z-40 p-0.5 rounded-full bg-slate-900 border border-slate-700/80 text-slate-400 hover:text-white hover:border-indigo-500/80 hover:bg-indigo-950/80 transition-all opacity-0 group-hover:opacity-100 shadow-md"
+          className="splitter-collapse-btn absolute top-3 left-1/2 -translate-x-1/2 z-40 p-0.5 rounded-full bg-[#161618] border border-white/10 text-zinc-400 hover:text-white hover:border-[#fbabfe]/60 hover:bg-[#2E103A] transition-all opacity-0 group-hover:opacity-100 shadow-md"
           title={isCollapsed ? "Mở rộng bảng" : "Thu gọn bảng"}
         >
           {direction === 'left' ? (

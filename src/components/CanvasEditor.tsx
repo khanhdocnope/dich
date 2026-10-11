@@ -111,8 +111,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const updateOffscreenBgRef = useRef<() => void>(() => {});
 
   // Tools & View Modes
-  const [activeTool, setActiveTool] = useState<'select' | 'add_bubble' | 'brush'>('select');
+  const [activeTool, setActiveTool] = useState<'select' | 'add_bubble' | 'brush' | 'inpaint_box'>('select');
   const [viewLayer, setViewLayer] = useState<'rendered' | 'original' | 'inpainted' | 'split'>('rendered');
+  const previousViewLayerRef = useRef<'rendered' | 'original' | 'inpainted' | 'split'>('rendered');
   const [splitPos, setSplitPos] = useState<number>(0.5);
 
   // Brush settings
@@ -133,6 +134,11 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   const [isDrawingNewBubble, setIsDrawingNewBubble] = useState<boolean>(false);
   const [drawStartPos, setDrawStartPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [currentDrawBox, setCurrentDrawBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+
+  // 🔲 Drag-to-Draw Inpaint Selection Box States
+  const [isDrawingInpaintBox, setIsDrawingInpaintBox] = useState<boolean>(false);
+  const [inpaintBoxStart, setInpaintBoxStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [currentInpaintBox, setCurrentInpaintBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [dynamicCursor, setDynamicCursor] = useState<string>('default');
 
   // Image references & dimensions
@@ -350,22 +356,22 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       if (selected) {
         ctx.save();
 
-        // Clean, Solid Professional Selection Outline (No dashed marching ants / No irritating dots)
-        ctx.shadowColor = 'rgba(99, 102, 241, 0.35)';
+        // Apple precision selection boundary
+        ctx.shadowColor = 'rgba(97, 31, 105, 0.45)';
         ctx.shadowBlur = 6 / currentZ;
-        ctx.strokeStyle = '#6366f1';
+        ctx.strokeStyle = '#fbabfe';
         ctx.lineWidth = 1.5 / currentZ;
         ctx.beginPath();
         if (typeof ctx.roundRect === 'function') {
-          ctx.roundRect(selected.x, selected.y, selected.width, selected.height, 4);
+          ctx.roundRect(selected.x, selected.y, selected.width, selected.height, 6);
         } else {
           ctx.rect(selected.x, selected.y, selected.width, selected.height);
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // 8 Figma-style handles with white center and indigo border
-        const handleSize = Math.max(5, 7 / currentZ);
+        // 8 Apple Precision Handles (Spherical #fbabfe with graphite border)
+        const handleRadius = Math.max(3.5, 4.5 / currentZ);
         const handles = [
           { name: 'nw', x: selected.x, y: selected.y },
           { name: 'n',  x: selected.x + selected.width / 2, y: selected.y },
@@ -379,10 +385,10 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
         handles.forEach((h) => {
           ctx.beginPath();
-          ctx.rect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
-          ctx.fillStyle = '#ffffff';
+          ctx.arc(h.x, h.y, handleRadius, 0, Math.PI * 2);
+          ctx.fillStyle = '#fbabfe';
           ctx.fill();
-          ctx.strokeStyle = '#4f46e5';
+          ctx.strokeStyle = '#0E0E10';
           ctx.lineWidth = 1.5 / currentZ;
           ctx.stroke();
         });
@@ -408,9 +414,21 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       ctx.restore();
     }
 
+    // 5b. Live Drag-to-Draw Preview Box for Inpaint Area Selection
+    if (isDrawingInpaintBox && currentInpaintBox) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.28)';
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5 / currentZ;
+      ctx.setLineDash([4 / currentZ, 4 / currentZ]);
+      ctx.strokeRect(currentInpaintBox.x, currentInpaintBox.y, currentInpaintBox.width, currentInpaintBox.height);
+      ctx.fillRect(currentInpaintBox.x, currentInpaintBox.y, currentInpaintBox.width, currentInpaintBox.height);
+      ctx.restore();
+    }
+
     // 6. Refresh Mini-map
     renderMinimap();
-  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox, renderMinimap]);
+  }, [imgDimensions, viewLayer, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox, isDrawingInpaintBox, currentInpaintBox, renderMinimap]);
 
   // RequestAnimationFrame Throttled Render Schedule
   const scheduleRender = useCallback(() => {
@@ -553,7 +571,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   // 4. Render overlay elements (bubbles, active tool, live drag box) without re-drawing offscreen background
   useEffect(() => {
     scheduleRender();
-  }, [scheduleRender, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox]);
+  }, [scheduleRender, bubbles, selectedBubbleId, activeTool, isDrawingNewBubble, currentDrawBox, isDrawingInpaintBox, currentInpaintBox]);
 
   useEffect(() => {
     return () => {
@@ -698,6 +716,14 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       return;
     }
 
+    // Inpaint Box Tool: Start Drag-to-Draw selection area to erase
+    if (activeTool === 'inpaint_box') {
+      setIsDrawingInpaintBox(true);
+      setInpaintBoxStart({ x, y });
+      setCurrentInpaintBox({ x, y, width: 0, height: 0 });
+      return;
+    }
+
     // Add Bubble Tool: Start Drag-to-Draw box directly on canvas
     if (activeTool === 'add_bubble') {
       setIsDrawingNewBubble(true);
@@ -789,6 +815,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       const w = Math.abs(x - drawStartPos.x);
       const h = Math.abs(y - drawStartPos.y);
       setCurrentDrawBox({ x: minX, y: minY, width: w, height: h });
+      return;
+    }
+
+    // Drag-to-Draw Inpaint Box
+    if (isDrawingInpaintBox) {
+      const minX = Math.min(x, inpaintBoxStart.x);
+      const minY = Math.min(y, inpaintBoxStart.y);
+      const w = Math.abs(x - inpaintBoxStart.x);
+      const h = Math.abs(y - inpaintBoxStart.y);
+      setCurrentInpaintBox({ x: minX, y: minY, width: w, height: h });
       return;
     }
 
@@ -917,8 +953,34 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     setResizeHandle(null);
     setBubbleInitialPos(null);
 
-    // Finalize Drag-to-Draw New Bubble
-    if (isDrawingNewBubble) {
+    // If using Brush, strictly return here: brush only erases text, NEVER automatically add or select bubbles!
+    if (activeTool === 'brush') {
+      return;
+    }
+
+    // Finalize Drag-to-Draw Inpaint Box (Only inpaint area, NEVER add bubbles)
+    if (isDrawingInpaintBox && activeTool === 'inpaint_box') {
+      setIsDrawingInpaintBox(false);
+      const box = currentInpaintBox;
+      setCurrentInpaintBox(null);
+      if (box && box.width >= 5 && box.height >= 5) {
+        const maskCanvas = maskCanvasRef.current;
+        if (maskCanvas) {
+          const mctx = maskCanvas.getContext('2d');
+          if (mctx) {
+            mctx.fillStyle = '#ef4444';
+            mctx.fillRect(box.x, box.y, box.width, box.height);
+            renderCanvas();
+            // Automatically trigger AI inpaint on this box area
+            handleApplyMaskInpaint();
+          }
+        }
+      }
+      return;
+    }
+
+    // Finalize Drag-to-Draw New Bubble (ONLY when user explicitly uses the Add Bubble tool)
+    if (isDrawingNewBubble && activeTool === 'add_bubble') {
       setIsDrawingNewBubble(false);
       const box = currentDrawBox;
       setCurrentDrawBox(null);
@@ -945,7 +1007,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
   // Global window listeners for drag & pan gestures so mouse doesn't get lost outside canvas
   useEffect(() => {
-    if (!isPanning && !isDraggingBubble && !isResizingBubble && !isBrushing && !isDrawingNewBubble && !isMinimapDragging) {
+    if (!isPanning && !isDraggingBubble && !isResizingBubble && !isBrushing && !isDrawingNewBubble && !isDrawingInpaintBox && !isMinimapDragging) {
       return;
     }
 
@@ -974,6 +1036,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         const w = Math.abs(x - drawStartPos.x);
         const h = Math.abs(y - drawStartPos.y);
         setCurrentDrawBox({ x: minX, y: minY, width: w, height: h });
+        return;
+      }
+
+      if (isDrawingInpaintBox) {
+        const minX = Math.min(x, inpaintBoxStart.x);
+        const minY = Math.min(y, inpaintBoxStart.y);
+        const w = Math.abs(x - inpaintBoxStart.x);
+        const h = Math.abs(y - inpaintBoxStart.y);
+        setCurrentInpaintBox({ x: minX, y: minY, width: w, height: h });
         return;
       }
 
@@ -1060,6 +1131,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     activeTool,
     isDrawingNewBubble,
     drawStartPos,
+    isDrawingInpaintBox,
+    inpaintBoxStart,
     isMinimapDragging,
     moveViewportFromMinimap,
   ]);
@@ -1353,77 +1426,57 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         </div>
       )}
 
-      {/* Top Floating Studio Toolbar (Only shown when an image is loaded) */}
+      {/* Top Floating View Pill Toolbar (Serene Editorial Studio) */}
       {rawImageUrl && (
-        <div className="canvas-toolbar-container">
-          <div className="canvas-floating-toolbar">
-          {/* Tool Segment */}
-          <div className="segmented-group">
-            <button
-              onClick={() => setActiveTool('select')}
-              className={`segmented-btn ${activeTool === 'select' ? 'active' : ''}`}
-              title="Công cụ chọn & di chuyển ô thoại (V)"
-            >
-              <MousePointer className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="desktop-inline">Chọn (V)</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTool('add_bubble')}
-              className={`segmented-btn ${activeTool === 'add_bubble' ? 'active' : ''}`}
-              title="Tạo ô thoại mới trên trang truyện (B)"
-            >
-              <Plus className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="desktop-inline">Thêm Ô (B)</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTool('brush')}
-              className={`segmented-btn ${activeTool === 'brush' ? 'active' : ''}`}
-              title="Cọ tô vùng cần xóa nền"
-            >
-              <Brush className="w-3.5 h-3.5 text-red-400" />
-              <span className="desktop-inline">Cọ Xóa</span>
-            </button>
-          </div>
-
-          {/* View Layer Segment */}
-          <div className="segmented-group">
-            <button
-              onClick={() => setViewLayer('rendered')}
-              className={`segmented-btn ${viewLayer === 'rendered' ? 'active' : ''}`}
-              title="Xem tranh đã dịch hoàn chỉnh"
-            >
-              <span>Hoàn Chỉnh</span>
-            </button>
+        <div className="absolute top-2.5 md:top-4 z-30 left-1/2 -translate-x-1/2 flex items-center gap-1 sm:gap-2 p-1 rounded-full bg-graphite-surface/95 backdrop-blur-md border border-whisper shadow-lg select-none max-w-[96vw] overflow-x-auto">
+          {/* Mode Switcher */}
+          <div className="flex items-center bg-surface-container-lowest p-0.5 rounded-full border border-whisper">
             <button
               onClick={() => setViewLayer('original')}
-              className={`segmented-btn ${viewLayer === 'original' ? 'active' : ''}`}
-              title="Xem tranh gốc tiếng Nhật/Trung"
+              className={`px-3 py-1 rounded-full text-label-sm font-label-sm transition-colors ${
+                viewLayer === 'original'
+                  ? 'bg-primary-container text-white shadow-sm font-medium'
+                  : 'text-text-muted hover:text-ink-paper'
+              }`}
             >
-              <span>Ảnh Gốc</span>
+              Raw
             </button>
             <button
               onClick={() => setViewLayer('inpainted')}
-              className={`segmented-btn ${viewLayer === 'inpainted' ? 'active' : ''}`}
-              title="Xem tranh đã xóa chữ sạch"
+              className={`px-3 py-1 rounded-full text-label-sm font-label-sm transition-colors ${
+                viewLayer === 'inpainted'
+                  ? 'bg-primary-container text-white shadow-sm font-medium'
+                  : 'text-text-muted hover:text-ink-paper'
+              }`}
             >
-              <span>Đã Xóa Chữ</span>
+              Cleaned
+            </button>
+            <button
+              onClick={() => setViewLayer('rendered')}
+              className={`px-3 py-1 rounded-full text-label-sm font-label-sm transition-colors ${
+                viewLayer === 'rendered'
+                  ? 'bg-primary-container text-white shadow-sm font-medium'
+                  : 'text-text-muted hover:text-ink-paper'
+              }`}
+            >
+              Typeset
             </button>
             <button
               onClick={() => setViewLayer('split')}
-              className={`segmented-btn ${viewLayer === 'split' ? 'active' : ''}`}
-              title="So sánh Trước / Sau"
+              className={`px-2.5 py-1 rounded-full text-label-sm font-label-sm transition-colors ${
+                viewLayer === 'split'
+                  ? 'bg-primary-container text-white shadow-sm font-medium'
+                  : 'text-text-muted hover:text-ink-paper'
+              }`}
             >
-              <Split className="w-3.5 h-3.5 text-purple-400" />
-              <span className="desktop-inline">So Sánh</span>
+              Split
             </button>
           </div>
 
-          {/* Interactive Comparison Split Slider (When in Split View) */}
+          {/* Split Slider when Split view is active */}
           {viewLayer === 'split' && (
-            <div className="segmented-group items-center px-2 py-0.5 space-x-1.5 bg-purple-950/40 border-purple-500/30">
-              <span className="text-[10px] text-purple-300 font-medium">Gốc</span>
+            <div className="flex items-center px-2 py-0.5 gap-1.5 bg-slack-aubergine-deep rounded-full border border-primary-container">
+              <span className="text-[10px] text-primary">Raw</span>
               <input
                 type="range"
                 min="0"
@@ -1431,110 +1484,71 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                 step="0.01"
                 value={splitPos}
                 onChange={(e) => setSplitPos(Number(e.target.value))}
-                className="w-20 accent-purple-400 cursor-pointer h-1.5 bg-slate-700 rounded-lg"
-                title="Kéo trượt để so sánh ảnh gốc và ảnh đã xóa"
+                className="w-16 accent-[#fbabfe] cursor-pointer h-1"
               />
-              <span className="text-[10px] text-purple-300 font-medium">Đã Xóa</span>
+              <span className="text-[10px] text-primary">Clean</span>
             </div>
           )}
 
-          {/* AI Page Cleaner Button */}
-          {onAutoCleanPage && (
-            <div className="segmented-group">
-              <button
-                onClick={onAutoCleanPage}
-                disabled={isCleaningPage}
-                className="segmented-btn text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
-                title="Tự động quét ký tự và xóa chữ toàn bộ trang bằng LaMa FFC"
-              >
-                {isCleaningPage ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                    <span className="desktop-inline">Đang AI Xóa...</span>
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="desktop-inline">AI Xóa Trang</span>
-                  </>
-                )}
-              </button>
-            </div>
-          )}
+          <div className="h-4 w-px bg-white/10"></div>
 
-          {/* History Segment (Undo / Redo / Reset) */}
-          <div className="segmented-group">
-            <button
-              onClick={onUndo}
-              disabled={!canUndo}
-              className="btn-icon disabled:opacity-30"
-              title="Hoàn tác thao tác trước (Ctrl + Z)"
-            >
-              <Undo2 className="w-3.5 h-3.5 text-indigo-300" />
-            </button>
-            <button
-              onClick={onRedo}
-              disabled={!canRedo}
-              className="btn-icon disabled:opacity-30"
-              title="Làm lại thao tác vừa hoàn tác (Ctrl + Y)"
-            >
-              <Redo2 className="w-3.5 h-3.5 text-indigo-300" />
-            </button>
-            {cleanedImageBase64 && onResetCleaned && (
-              <button
-                onClick={onResetCleaned}
-                className="segmented-btn text-[11px] text-amber-300 hover:text-amber-200"
-                title="Khôi phục lại ảnh gốc ban đầu"
-              >
-                <RotateCcw className="w-3 h-3 text-amber-400 mr-1" />
-                <span className="desktop-inline">Khôi Phục Gốc</span>
-              </button>
-            )}
-          </div>
-
-          {/* Photoshop / Figma Zoom Controls Segment */}
-          <div className="segmented-group flex items-center">
+          {/* Zoom Controls */}
+          <div className="flex items-center gap-1 px-2 text-text-muted">
             <button
               onClick={() => handleZoomBy(0.85)}
-              className="btn-icon"
-              title="Thu nhỏ (Zoom Out)"
+              className="w-6 h-6 rounded flex items-center justify-center hover:text-ink-paper hover:bg-graphite-subtle"
+              title="Thu nhỏ"
             >
-              <ZoomOut className="w-3.5 h-3.5" />
+              <span className="material-symbols-outlined text-[16px]">remove</span>
             </button>
-            <input
-              type="range"
-              min="10"
-              max="400"
-              step="5"
-              value={Math.round(zoom * 100)}
-              onChange={(e) => handleZoomSlider(Number(e.target.value))}
-              className="zoom-slider-range w-16 md:w-24 desktop-inline cursor-pointer mx-1"
-              title={`Thu phóng: ${Math.round(zoom * 100)}%`}
-            />
-            <button
-              onClick={() => setZoomPreset(1.0)}
-              className="segmented-btn font-mono text-[11px] px-1.5 min-w-[42px] text-center"
-              title="Nhấp để đặt 100% kích thước thực"
-            >
+            <span className="text-code-sm font-code-sm text-ink-paper min-w-[38px] text-center">
               {Math.round(zoom * 100)}%
-            </button>
+            </span>
             <button
               onClick={() => handleZoomBy(1.15)}
-              className="btn-icon"
-              title="Phóng to (Zoom In)"
+              className="w-6 h-6 rounded flex items-center justify-center hover:text-ink-paper hover:bg-graphite-subtle"
+              title="Phóng to"
             >
-              <ZoomIn className="w-3.5 h-3.5" />
+              <span className="material-symbols-outlined text-[16px]">add</span>
             </button>
             <button
               onClick={handleFitScreen}
-              className="btn-icon"
-              title="Vừa vặn màn hình (Fit View)"
+              className="px-2 py-0.5 rounded bg-surface-container border border-whisper text-label-sm font-label-sm hover:text-ink-paper hover:bg-graphite-subtle"
             >
-              <Maximize className="w-3.5 h-3.5" />
+              Fit
             </button>
           </div>
+
+          <div className="h-4 w-px bg-white/10 hidden sm:block"></div>
+
+          {/* Hold to Peek Raw Feature */}
+          <button
+            onMouseDown={() => {
+              previousViewLayerRef.current = viewLayer;
+              setViewLayer('original');
+            }}
+            onMouseUp={() => {
+              setViewLayer(previousViewLayerRef.current);
+            }}
+            onMouseLeave={() => {
+              if (viewLayer === 'original' && previousViewLayerRef.current !== 'original') {
+                setViewLayer(previousViewLayerRef.current);
+              }
+            }}
+            onTouchStart={() => {
+              previousViewLayerRef.current = viewLayer;
+              setViewLayer('original');
+            }}
+            onTouchEnd={() => {
+              setViewLayer(previousViewLayerRef.current);
+            }}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-label-sm font-label-sm bg-surface-container text-text-muted hover:text-ink-paper hover:bg-graphite-subtle transition-all"
+            title="Hold to Peek Raw"
+          >
+            <span className="material-symbols-outlined text-[15px]">visibility</span>
+            <span>Hold to Peek Raw</span>
+          </button>
         </div>
-      </div>
       )}
 
       {/* Dedicated Mask Brush Sub-Toolbar (When Brush is active) */}
@@ -1660,7 +1674,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                 ? isPanning
                   ? 'grabbing'
                   : 'grab'
-                : activeTool === 'brush' || activeTool === 'add_bubble' || isDrawingNewBubble
+                : activeTool === 'brush' || activeTool === 'add_bubble' || activeTool === 'inpaint_box' || isDrawingNewBubble || isDrawingInpaintBox
                 ? 'crosshair'
                 : dynamicCursor !== 'default'
                 ? dynamicCursor
@@ -1803,76 +1817,129 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
         </div>
       )}
 
-      {/* Mini-map Navigator HUD (Photoshop / Figma Standard) */}
+      {/* Floating Atelier Tool Dock: On mobile it appears at the TOP (top-[52px]), on desktop at the bottom (md:bottom-5) */}
       {rawImageUrl && (
-        <div className="canvas-minimap-container desktop-only select-none">
-          <div className="navigator-hud bg-slate-950/90 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-xl transition-all w-48">
-            {/* Header */}
-            <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-200 font-semibold">
-              <div className="flex items-center space-x-1.5">
-                <Compass className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Bản Đồ</span>
-              </div>
-              <div className="flex items-center space-x-1.5">
-                <span className="font-mono text-[10px] text-indigo-300 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/40">
-                  {Math.round(zoom * 100)}%
-                </span>
-                <button
-                  onClick={() => setIsMinimapCollapsed((prev) => !prev)}
-                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                  title={isMinimapCollapsed ? 'Mở rộng bản đồ' : 'Thu gọn bản đồ'}
-                >
-                  {isMinimapCollapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-              </div>
+        <div className="absolute top-[52px] md:top-auto md:bottom-5 z-30 left-1/2 -translate-x-1/2 flex items-center gap-1.5 sm:gap-2 p-1 sm:p-1.5 rounded-full bg-graphite-surface/95 backdrop-blur-md border border-whisper shadow-xl select-none max-w-[96vw] overflow-x-auto">
+          {/* Select Tool (V) */}
+          <button
+            onClick={() => setActiveTool('select')}
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+              activeTool === 'select'
+                ? 'bg-slack-aubergine-deep text-primary border border-primary-container shadow-sm'
+                : 'text-text-muted hover:text-ink-paper hover:bg-graphite-subtle'
+            }`}
+            title="Công cụ chọn & di chuyển (V)"
+          >
+            <span className="material-symbols-outlined text-[18px]">near_me</span>
+          </button>
+
+          {/* Speech Balloon Pen (B) - Giữ nguyên nút giống bình luận */}
+          <button
+            onClick={() => setActiveTool('add_bubble')}
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+              activeTool === 'add_bubble'
+                ? 'bg-slack-aubergine-deep text-primary border border-primary-container shadow-sm'
+                : 'text-text-muted hover:text-ink-paper hover:bg-graphite-subtle'
+            }`}
+            title="Thêm & vẽ khung bóng thoại (B)"
+          >
+            <span className="material-symbols-outlined text-[18px]">chat_bubble_outline</span>
+          </button>
+
+          <div className="h-4 w-px bg-white/10 mx-0.5"></div>
+
+          {/* Inpaint Eraser Brush with Radius Pill */}
+          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition-all ${
+            activeTool === 'brush'
+              ? 'bg-slack-aubergine-deep border-primary-container text-primary'
+              : 'bg-surface-container border-whisper text-text-muted'
+          }`}>
+            <button
+              onClick={() => setActiveTool(activeTool === 'brush' ? 'select' : 'brush')}
+              className="flex items-center gap-1"
+              title="Bút cọ tô vùng xóa Inpaint"
+            >
+              <span className="material-symbols-outlined text-[16px]">brush</span>
+              <span className="text-label-sm font-label-sm text-ink-paper">{brushSize}px</span>
+            </button>
+            <div className="flex flex-col gap-0.5 ml-1">
+              <button
+                onClick={() => setBrushSize((s) => Math.min(s + 5, 120))}
+                className="text-text-muted hover:text-ink-paper leading-none text-[9px]"
+              >▲</button>
+              <button
+                onClick={() => setBrushSize((s) => Math.max(s - 5, 5))}
+                className="text-text-muted hover:text-ink-paper leading-none text-[9px]"
+              >▼</button>
             </div>
-
-            {/* Mini-map Body */}
-            {!isMinimapCollapsed && (
-              <div className="p-2 space-y-2">
-                <div className="relative rounded-lg overflow-hidden border border-slate-800/90 bg-slate-900 flex items-center justify-center">
-                  <canvas
-                    ref={minimapCanvasRef}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setIsMinimapDragging(true);
-                      moveViewportFromMinimap(e.clientX, e.clientY);
-                    }}
-                    className="cursor-crosshair block w-full h-auto object-contain"
-                    title="Kéo hoặc click để di chuyển vùng nhìn màn hình"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] text-slate-400">
-                  <button
-                    onClick={handleFitScreen}
-                    className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 hover:text-white border border-slate-800 transition-all flex items-center space-x-1"
-                  >
-                    <Maximize className="w-2.5 h-2.5 text-indigo-400" />
-                    <span>Toàn Màn</span>
-                  </button>
-                  <button
-                    onClick={() => setZoomPreset(1.0)}
-                    className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 hover:text-white border border-slate-800 transition-all font-mono"
-                  >
-                    100%
-                  </button>
-                </div>
-              </div>
+            {activeTool === 'brush' && (
+              <button
+                onClick={handleApplyMaskInpaint}
+                disabled={isProcessing}
+                className="ml-1 px-2 py-0.5 rounded-full bg-primary-container hover:bg-[#73257D] text-white text-[11px] font-medium transition-all"
+                title="Gửi vùng đã tô cọ tới máy chủ AI để xóa"
+              >
+                Xóa
+              </button>
             )}
           </div>
-        </div>
-      )}
 
-      {/* Bottom Status Hint Bar */}
-      {rawImageUrl && (
-        <div className="canvas-status-hint desktop-only">
-          <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
-          <span>•</span>
-          <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>
-          <span>•</span>
-          <span><strong>Phím Delete:</strong> Xóa ô thoại</span>
+          {/* Vùng chọn tô để xóa ảnh (Biến đổi SVG từ nút TT thành hộp vùng chọn tô xóa) */}
+          <button
+            onClick={() => setActiveTool(activeTool === 'inpaint_box' ? 'select' : 'inpaint_box')}
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+              activeTool === 'inpaint_box'
+                ? 'bg-slack-aubergine-deep text-primary border border-primary-container shadow-sm'
+                : 'text-text-muted hover:text-ink-paper hover:bg-graphite-subtle'
+            }`}
+            title="Khoanh vùng chọn để tô xóa ảnh (Kéo thả hộp để xóa)"
+          >
+            <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path strokeDasharray="3 3" d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z" />
+              <rect x="7" y="7" width="10" height="10" rx="1" fill="currentColor" fillOpacity="0.25" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </button>
+
+          {/* Gậy phép: AI tự quét ảnh và xóa ảnh toàn trang (ComicTextDetector + LaMa Inpaint) */}
+          {onAutoCleanPage && (
+            <button
+              onClick={onAutoCleanPage}
+              disabled={isCleaningPage || isProcessing}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all disabled:opacity-40 ${
+                isCleaningPage
+                  ? 'bg-slack-aubergine-deep text-primary border border-primary-container animate-pulse'
+                  : 'text-text-muted hover:text-ink-paper hover:bg-graphite-subtle'
+              }`}
+              title="AI tự quét ảnh và xóa ảnh toàn trang (ComicTextDetector + LaMa)"
+            >
+              <span className={`material-symbols-outlined text-[18px] ${isCleaningPage ? 'animate-spin text-primary' : ''}`}>
+                auto_fix_high
+              </span>
+            </button>
+          )}
+
+          {/* Undo */}
+          {onUndo && (
+            <button
+              onClick={onUndo}
+              disabled={!canUndo}
+              className="w-9 h-9 rounded-full text-text-muted hover:text-ink-paper hover:bg-graphite-subtle flex items-center justify-center transition-all disabled:opacity-30"
+              title="Hoàn tác (Ctrl+Z)"
+            >
+              <Undo2 className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Khôi phục ảnh gốc */}
+          {cleanedImageBase64 && onResetCleaned && (
+            <button
+              onClick={onResetCleaned}
+              className="w-9 h-9 rounded-full text-text-muted hover:text-amber-400 hover:bg-graphite-subtle flex items-center justify-center transition-all"
+              title="Khôi phục ảnh gốc"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -1,14 +1,41 @@
 {
   "name": "manga-translator-studio",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "AI Manga/Comic Translator Studio with LaMa Inpainting and Visual Editor",
-  "main": "server/server.js",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "node server/server.js",
     "client": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:win": "npm run build && electron-builder --win nsis portable"
+  },
+  "build": {
+    "appId": "com.khanhdocnope.mangastudio",
+    "productName": "Manga Translator Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "public/favicon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Manga Translator Studio"
+    }
   },
   "keywords": [
     "manga",
@@ -43,6 +70,8 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8",
     "typescript": "^7.0.2",
     "vite": "^8.3.1"
   }

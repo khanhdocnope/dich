@@ -6,6 +6,7 @@ node_modules/
 dist/
 build/
 out/
+release/
 
 # Image & Data Directories
 raw materials/
@@ -37,3 +38,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 .vscode/
+backup/
+models/
+*.zip

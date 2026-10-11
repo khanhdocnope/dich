@@ -1,4 +1,4 @@
-name: Build Android APK & Release
+name: Build Android APK & Windows EXE Release
 
 on:
   push:
@@ -53,60 +53,120 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Manga-Translator-APK
+          name: android-release-apk
           path: |
             Manga-Translator.apk
             Manga-Translator-${{ github.ref_name }}.apk
 
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Build Windows Executables
+        run: npx electron-builder --win nsis portable
+
+      - name: Prepare Windows Executables
+        shell: pwsh
+        run: |
+          $setupExe = Get-Item release/*Setup*.exe | Select-Object -First 1
+          if ($setupExe) {
+            Copy-Item $setupExe.FullName "Manga-Translator-Studio-Setup-${{ github.ref_name }}.exe"
+          }
+          $portableExe = Get-Item release/*.exe | Where-Object { $_.Name -notmatch "Setup" } | Select-Object -First 1
+          if ($portableExe) {
+            Copy-Item $portableExe.FullName "Manga-Translator-Studio-Portable-${{ github.ref_name }}.exe"
+          }
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-exe
+          path: |
+            Manga-Translator-Studio-Setup-${{ github.ref_name }}.exe
+            Manga-Translator-Studio-Portable-${{ github.ref_name }}.exe
+
+  create-release:
+    name: Publish Multiplatform Release
+    needs: [build-apk, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: ls -la
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             Manga-Translator.apk
             Manga-Translator-${{ github.ref_name }}.apk
-          name: 🚀 Manga Translator ${{ github.ref_name }} (Android APK)
+            Manga-Translator-Studio-Setup-${{ github.ref_name }}.exe
+            Manga-Translator-Studio-Portable-${{ github.ref_name }}.exe
+          name: 🚀 Manga Translator Studio ${{ github.ref_name }} (APK & Windows)
           body: |
-            # 🎨 Manga Translator - Phiên bản ${{ github.ref_name }}
+            # 🎨 Manga Translator Studio - Phiên bản ${{ github.ref_name }}
 
-            Chào mừng bạn đến với phiên bản chính thức **Manga Translator ${{ github.ref_name }}** dành cho thiết bị Android & Web!
+            Chào mừng bạn đến với phiên bản chính thức **Manga Translator Studio ${{ github.ref_name }}** hỗ trợ cả thiết bị **Android** và **Windows PC**!
 
-            [![Android APK](https://img.shields.io/badge/Download-Manga_Translator_APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#download)
-            [![Capacitor](https://img.shields.io/badge/Capacitor-v8.5-119EFF?style=for-the-badge&logo=capacitor&logoColor=white)](#)
+            [![Android APK](https://img.shields.io/badge/Download-Android_APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#download)
+            [![Windows EXE](https://img.shields.io/badge/Download-Windows_EXE-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#download)
             [![License MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](#)
 
             ---
 
-            ### 🌟 Tính Năng Mới Trên Phiên Bản ${{ github.ref_name }}
+            ### 🌟 Điểm Mới Trên Phiên Bản ${{ github.ref_name }}
 
-            - 📁 **Chọn Cả Thư Mục Ảnh Đầu Vào (Input Folder Picker)**:
-              - Cho phép chọn toàn bộ thư mục chapter manga cùng lúc trên điện thoại & máy tính.
-              - **Tự động sắp xếp thứ tự trang tự nhiên (Natural Numerical Sort)**: `1.jpg, 2.jpg, ... 10.jpg` đúng chuẩn đọc truyện.
-            - 💾 **Tùy Chọn & Cài Đặt Thư Mục Lưu Kết Quả (Output Folder)**:
-              - Lưu trực tiếp kết quả vào bộ nhớ máy Android tại `Documents/MangaTranslator/[Chapter]`.
-              - Không bị popup hỏi lưu từng file khi chạy hàng loạt.
-            - 📦 **Đóng Gói Trọn Gói Thư Mục (.ZIP)**:
-              - Tải về toàn bộ các trang đã dịch dưới dạng 1 file nén `.ZIP` duy nhất với 1 chạm.
-            - 📱 **Đóng gói Native Android (.apk)**:
-              - Tên ứng dụng hiển thị trên màn hình: **Manga Translator**.
-              - Đầy đủ tính năng Offline-first với IndexedDB Storage và bộ font tiếng Việt 100%.
-            - 🤖 **Bộ đôi AI Đỉnh Cao**:
-              - Mô hình xóa chữ nền **LaMa (Large Mask Inpainting)** siêu sạch.
-              - Nhận diện chữ **Manga-OCR** offline không kiểm duyệt & **Gemini AI Vision** hiểu ngữ cảnh.
-
-            ---
-
-            ### 📲 Hướng Dẫn Cài Đặt File APK
-
-            1. Cuộn xuống phần **Assets** bên dưới và nhấn tải file **`Manga-Translator.apk`** hoặc **`Manga-Translator-${{ github.ref_name }}.apk`**.
-            2. Mở file `.apk` đã tải trên điện thoại Android của bạn.
-            3. Nếu thiết bị hỏi quyền cài đặt từ nguồn ngoài, hãy chọn **Cho phép (Allow)**.
-            4. Nhấn **Cài đặt (Install)** và trải nghiệm dịch truyện không giới hạn!
+            - 💻 **Bản Cài Đặt & Chạy Trực Tiếp Cho Windows (.EXE)**:
+              - File **Setup Installer**: Cài đặt vào máy tính, tự tạo icon Desktop & Start Menu.
+              - File **Portable**: Chạy trực tiếp siêu tiện lợi không cần cài đặt.
+            - 🇻🇳 **Ngôn Ngữ Giao Diện Chuẩn Studio**:
+              - Tùy chọn chuyển đổi tức thì giữa **Tiếng Việt** và **English**.
+              - Việt hóa toàn diện thanh công cụ, bảng thuộc tính, thư viện trang và menu điều hướng.
+            - 📐 **Thiết Kế Serene Bento Obsidian Dark**:
+              - Sửa lỗi thanh lọc trang (không còn bị tràn viền nút *Đã Xong*).
+              - Sắp xếp thông tin thẻ trang khoa học, tên file hiển thị trọn vẹn.
+              - Thanh công cụ vẽ/xóa trên điện thoại đưa lên đầu màn hình, tránh bị che bởi thanh điều hướng ngón tay cái.
+            - 🧹 **Cọ Vẽ Inpaint Chuẩn Xác**:
+              - Chỉ tập trung xóa chữ trên ảnh gốc với mô hình LaMa, tuyệt đối không tự chèn thêm bounding box thừa.
+            - ⚡ **Kết Nối AI Thuận Tiện**:
+              - Truy cập cài đặt Google Colab URL & Gemini API Key nhanh chóng qua 3 vị trí trên giao diện.
 
             ---
-            *📌 Được tự động đóng gói & xuất bản bởi **GitHub Actions & Capacitor CLI**.*
+
+            ### 📲 Hướng Dẫn Tải & Cài Đặt
+
+            #### 💻 Dành cho Windows:
+            1. Tải **`Manga-Translator-Studio-Setup-${{ github.ref_name }}.exe`** (bản cài đặt) hoặc **`Manga-Translator-Studio-Portable-${{ github.ref_name }}.exe`** (chạy ngay).
+            2. Mở file `.exe` để bắt đầu sử dụng ngay lập tức trên máy tính.
+
+            #### 📱 Dành cho Android:
+            1. Tải file **`Manga-Translator.apk`** hoặc **`Manga-Translator-${{ github.ref_name }}.apk`**.
+            2. Mở file `.apk` trên điện thoại Android và chọn **Cài đặt**.
+
+            ---
+            *📌 Được tự động đóng gói & xuất bản bởi **GitHub Actions, Capacitor CLI & Electron Builder**.*
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
