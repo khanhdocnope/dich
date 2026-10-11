@@ -12,7 +12,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { ColabConfig } from '../types';
-import { checkColabHealth } from '../services/colabClient';
+import { checkColabHealth, normalizeServerUrl } from '../services/colabClient';
 
 interface ColabModalProps {
   isOpen: boolean;
@@ -36,15 +36,20 @@ export const ColabModal: React.FC<ColabModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   const handleTestConnection = async () => {
-    if (!serverUrl.trim()) {
-      setTestResult({ success: false, message: 'Vui lòng nhập URL Colab ngrok' });
+    const normalized = normalizeServerUrl(serverUrl);
+    if (normalized !== serverUrl.trim()) {
+      setServerUrl(normalized);
+    }
+
+    if (!normalized) {
+      setTestResult({ success: false, message: 'Vui lòng nhập URL Hugging Face Space hoặc Colab ngrok' });
       return;
     }
 
     setIsTesting(true);
     setTestResult(null);
 
-    const health = await checkColabHealth(serverUrl);
+    const health = await checkColabHealth(normalized);
     setIsTesting(false);
 
     if (health.online) {
@@ -54,7 +59,7 @@ export const ColabModal: React.FC<ColabModalProps> = ({
       });
       onSaveConfig({
         ...config,
-        serverUrl,
+        serverUrl: normalized,
         geminiApiKey,
         connected: true,
         gpuName: health.gpuName,
@@ -62,15 +67,16 @@ export const ColabModal: React.FC<ColabModalProps> = ({
     } else {
       setTestResult({
         success: false,
-        message: 'Không thể kết nối đến URL này. Hãy kiểm tra server Colab đã chạy chưa.',
+        message: 'Không thể kết nối đến URL này. Hãy kiểm tra server đã chạy và link hợp lệ chưa.',
       });
     }
   };
 
   const handleSave = () => {
+    const normalized = normalizeServerUrl(serverUrl);
     onSaveConfig({
       ...config,
-      serverUrl,
+      serverUrl: normalized,
       geminiApiKey,
       connected: testResult?.success || config.connected,
     });
@@ -151,6 +157,14 @@ export const ColabModal: React.FC<ColabModalProps> = ({
                 )}
               </button>
             </div>
+            {serverUrl.includes('huggingface.co/spaces/') && (
+              <div className="p-2 rounded-lg bg-indigo-950/60 border border-indigo-700/50 text-[11px] text-indigo-300 flex items-center space-x-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>
+                  Đã phát hiện link web Space. Khi bấm Test/Lưu, hệ thống tự động đổi sang link Direct API: <strong className="font-mono text-white">{normalizeServerUrl(serverUrl)}</strong>
+                </span>
+              </div>
+            )}
             {testResult && (
               <div
                 className={`p-2 rounded-lg text-xs flex items-center space-x-1.5 ${

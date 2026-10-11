@@ -31,6 +31,9 @@ interface SidebarProps {
   isLoading: boolean;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  width?: string;
+  isCollapsed?: boolean;
+  onToggleCollapse?: (collapsed: boolean) => void;
 }
 
 /**
@@ -134,8 +137,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isLoading,
   isOpenMobile = false,
   onCloseMobile,
+  width,
+  isCollapsed: controlledCollapsed,
+  onToggleCollapse,
 }) => {
-  const [collapsed, setCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
+
+  const toggleCollapsed = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse(!isCollapsed);
+    } else {
+      setInternalCollapsed(!isCollapsed);
+    }
+  };
+
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'raw' | 'done'>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -171,9 +187,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`sidebar-drawer ${isOpenMobile ? 'open' : ''} relative h-full glass-panel border-r border-slate-800 transition-all duration-300 flex flex-col z-20 select-none ${
-        collapsed ? 'w-14' : 'w-72 sm:w-80'
+      className={`sidebar-drawer ${isOpenMobile ? 'open' : ''} relative h-full glass-panel border-r border-slate-800 transition-all duration-200 flex flex-col z-20 select-none ${
+        isCollapsed ? 'w-14' : !width ? 'w-72 sm:w-80' : ''
       }`}
+      style={!isOpenMobile && !isCollapsed && width ? { width, minWidth: '200px', maxWidth: '40%' } : undefined}
     >
       {/* Mobile Bottom Sheet Pull Pill Handle */}
       <div className="mobile-only flex justify-center w-full pt-1 pb-0.5">
@@ -204,7 +221,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Top Header */}
       <div className="p-3 border-b border-slate-800 flex items-center justify-between shrink-0 bg-slate-900/50">
-        {!collapsed && (
+        {!isCollapsed && (
           <div className="flex items-center space-x-2 truncate">
             <Images className="w-4 h-4 text-indigo-400 shrink-0" />
             <div className="truncate">
@@ -245,16 +262,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
 
           <button
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={toggleCollapsed}
             className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-            title={collapsed ? 'Mở rộng thư viện' : 'Thu gọn'}
+            title={isCollapsed ? 'Mở rộng thư viện' : 'Thu gọn'}
           >
-            {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
+            {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
           </button>
         </div>
       </div>
 
-      {!collapsed && (
+      {!isCollapsed && (
         <>
           {/* Action Bar: Add Photos / Folders */}
           <div className="p-2.5 border-b border-slate-800/80 bg-slate-950/70 shrink-0 space-y-2">
@@ -474,7 +491,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* Collapsed view icons */}
-      {collapsed && (
+      {isCollapsed && (
         <div className="flex-1 overflow-y-auto p-1 space-y-2 mt-2 flex flex-col items-center">
           <button
             onClick={handleTriggerPickFolder}

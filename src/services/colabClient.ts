@@ -1,12 +1,33 @@
 import { Bubble, ColabConfig } from '../types';
 
 /**
+ * Chuẩn hóa và tự động chuyển đổi URL máy chủ:
+ * - Tự động chuyển link web Hugging Face Spaces (https://huggingface.co/spaces/{user}/{space})
+ *   thành link API trực tiếp (https://{user}-{space}.hf.space)
+ * - Loại bỏ dấu gạch chéo ở cuối URL
+ */
+export const normalizeServerUrl = (rawUrl: string): string => {
+  if (!rawUrl) return '';
+  let url = rawUrl.trim().replace(/\/+$/, '');
+
+  // Phát hiện và chuyển đổi link web Hugging Face Spaces
+  const hfMatch = url.match(/^https?:\/\/huggingface\.co\/spaces\/([^/]+)\/([^/?#]+)/i);
+  if (hfMatch) {
+    const user = hfMatch[1].toLowerCase().replace(/_/g, '-');
+    const space = hfMatch[2].toLowerCase().replace(/_/g, '-');
+    url = `https://${user}-${space}.hf.space`;
+  }
+
+  return url;
+};
+
+/**
  * Basic health check for optional external AI backend
  */
 export const checkColabHealth = async (serverUrl: string): Promise<{ online: boolean; gpuName?: string }> => {
   if (!serverUrl) return { online: false };
   try {
-    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const cleanUrl = normalizeServerUrl(serverUrl);
     const res = await fetch(`${cleanUrl}/health`, {
       method: 'GET',
       headers: { 'ngrok-skip-browser-warning': 'true' },
@@ -26,7 +47,16 @@ export const checkColabHealth = async (serverUrl: string): Promise<{ online: boo
  */
 export const ensureBase64 = async (urlOrBase64: string): Promise<string> => {
   if (!urlOrBase64) return '';
-  if (urlOrBase64.startsWith('blob:')) {
+  if (urlOrBase64.startsWith('data:image/')) {
+    return urlOrBase64;
+  }
+  if (
+    urlOrBase64.startsWith('blob:') ||
+    urlOrBase64.startsWith('http://') ||
+    urlOrBase64.startsWith('https://') ||
+    urlOrBase64.startsWith('/') ||
+    urlOrBase64.startsWith('./')
+  ) {
     try {
       const res = await fetch(urlOrBase64);
       const blob = await res.blob();
@@ -37,7 +67,7 @@ export const ensureBase64 = async (urlOrBase64: string): Promise<string> => {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.error('Failed to convert Blob URL to base64:', e);
+      console.error('Failed to convert URL/Blob to base64:', e);
       return urlOrBase64;
     }
   }
@@ -68,7 +98,7 @@ export const switchIOPaintModel = async (
 ): Promise<{ success: boolean; currentModel?: string }> => {
   if (!serverUrl) return { success: false };
   try {
-    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const cleanUrl = normalizeServerUrl(serverUrl);
     let res = await fetch(`${cleanUrl}/api/switch_model`, {
       method: 'POST',
       headers: {
@@ -107,7 +137,7 @@ export const cleanPageWithAI = async (
   if (!serverUrl) return { success: false, error: 'Chưa kết nối Colab AI Server' };
 
   try {
-    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const cleanUrl = normalizeServerUrl(serverUrl);
     const payloadImg = await ensureBase64(imageBase64);
     const bodyStr = JSON.stringify({
       imageBase64: payloadImg,
@@ -146,7 +176,14 @@ export const cleanPageWithAI = async (
       };
     } else {
       const err = await res.text();
-      return { success: false, error: err || 'Lỗi xử lý từ máy chủ AI' };
+      let friendlyErr = err;
+      try {
+        const jsonErr = JSON.parse(err);
+        if (jsonErr?.error?.message === 'Method Not Allowed' || jsonErr?.message === 'Method Not Allowed') {
+          friendlyErr = 'Máy chủ phản hồi "Method Not Allowed". Nếu bạn dùng Hugging Face Space, vui lòng đảm bảo dùng link trực tiếp https://<user>-<space>.hf.space thay vì link web huggingface.co/spaces/... (Hệ thống đã tự động sửa link trong bảng Cài đặt Máy Chủ AI).';
+        }
+      } catch {}
+      return { success: false, error: friendlyErr || 'Lỗi xử lý từ máy chủ AI' };
     }
   } catch (e: any) {
     console.error('cleanPageWithAI failed:', e);
@@ -164,7 +201,7 @@ export const detectTextRegions = async (
   if (!serverUrl) return { success: false, boxes: [] };
 
   try {
-    const cleanUrl = serverUrl.replace(/\/+$/, '');
+    const cleanUrl = normalizeServerUrl(serverUrl);
     const payloadImg = await ensureBase64(imageBase64);
     const bodyStr = JSON.stringify({ imageBase64: payloadImg });
 
@@ -211,15 +248,18 @@ export const inpaintImageWithLaMa = async (
   imageBase64: string,
   maskBase64: string
 ): Promise<string> => {
-  if (!serverUrl) return imageBase64;
+  if (!serverUrl) {
+    throw new Error('Chưa kết nối Máy Chủ AI. Vui lòng bấm vào "Máy Chủ AI" trên đầu trang để nhập địa chỉ server.');
+  }
 
+  const cleanUrl = normalizeServerUrl(serverUrl);
+  const payloadImg = await ensureBase64(imageBase64);
+  const payloadMask = await ensureBase64(maskBase64);
+  const bodyStr = JSON.stringify({ imageBase64: payloadImg, maskBase64: payloadMask });
+
+  let res: Response;
   try {
-    const cleanUrl = serverUrl.replace(/\/+$/, '');
-    const payloadImg = await ensureBase64(imageBase64);
-    const payloadMask = await ensureBase64(maskBase64);
-    const bodyStr = JSON.stringify({ imageBase64: payloadImg, maskBase64: payloadMask });
-
-    let res = await fetch(`${cleanUrl}/api/inpaint`, {
+    res = await fetch(`${cleanUrl}/api/inpaint`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -238,18 +278,27 @@ export const inpaintImageWithLaMa = async (
         body: bodyStr,
       });
     }
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.cleanedImageBase64) {
-        return data.cleanedImageBase64;
-      }
-    }
-  } catch (e) {
-    console.warn('Inpaint request failed:', e);
+  } catch (networkErr: any) {
+    throw new Error(`Không thể gửi dữ liệu tới máy chủ AI (${networkErr?.message || networkErr}). Vui lòng kiểm tra lại đường truyền hoặc link server.`);
   }
 
-  return imageBase64;
+  if (res.ok) {
+    const data = await res.json();
+    if (data.cleanedImageBase64) {
+      return data.cleanedImageBase64;
+    }
+    throw new Error('Máy chủ phản hồi thành công nhưng không tìm thấy dữ liệu ảnh trả về.');
+  } else {
+    const errText = await res.text();
+    let friendlyErr = errText;
+    try {
+      const jsonErr = JSON.parse(errText);
+      if (jsonErr?.error?.message === 'Method Not Allowed' || jsonErr?.message === 'Method Not Allowed') {
+        friendlyErr = 'Máy chủ phản hồi "Method Not Allowed". Nếu dùng Hugging Face Space, vui lòng dùng link trực tiếp https://<user>-<space>.hf.space thay vì link web huggingface.co/spaces/... (Hệ thống đã tự động sửa link trong bảng Cài đặt Máy Chủ AI).';
+      }
+    } catch {}
+    throw new Error(`Máy chủ báo lỗi HTTP ${res.status}: ${friendlyErr || res.statusText}`);
+  }
 };
 
 /**
@@ -263,7 +312,7 @@ export const ocrBubbles = async (
   if (!config?.serverUrl || !config.connected) return bubbles;
 
   try {
-    const cleanUrl = config.serverUrl.replace(/\/+$/, '');
+    const cleanUrl = normalizeServerUrl(config.serverUrl);
     const payloadImg = await ensureBase64(imageBase64);
     const res = await fetch(`${cleanUrl}/api/ocr`, {
       method: 'POST',

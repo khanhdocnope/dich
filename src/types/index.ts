@@ -1,3 +1,5 @@
+export type MangaBoxShape = 'ellipse' | 'rounded' | 'rectangle' | 'shout' | 'thought' | 'transparent';
+
 export interface TextStyle {
   fontFamily: string;
   fontSize: number;
@@ -8,11 +10,12 @@ export interface TextStyle {
   strokeWidth: number;
   backgroundColor: string; // e.g. '#ffffff' or 'transparent'
   backgroundOpacity: number; // 0 to 1
-  borderRadius: number; // 0 to 50 px
+  borderRadius: number; // 0 to 80 px
   boxPadding: number; // 0 to 30 px
   boxBorderColor: string; // e.g. '#000000'
   boxBorderWidth: number; // 0 to 10 px
   boxPreset: 'transparent' | 'white' | 'black' | 'custom';
+  boxShape?: MangaBoxShape; // 'ellipse' | 'rounded' | 'rectangle' | 'shout' | 'thought' | 'transparent'
   textAlign: 'center' | 'left' | 'right';
   lineHeight: number;
   letterSpacing: number;

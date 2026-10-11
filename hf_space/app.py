@@ -15,7 +15,7 @@ Ported from d:\dich\colab\colab_server.py with 100% Algorithm Fidelity:
 from __future__ import annotations
 
 import os
-os.environ.setdefault("GRADIO_SSR_MODE", "False")
+os.environ["GRADIO_SSR_MODE"] = "false"
 
 import sys
 import io
@@ -568,9 +568,58 @@ cleaner_pipeline = MangaCleanerPipeline()
 # 7. Base64 & Format Helpers
 # --------------------------------------------------------------------------------------
 def b64_to_pil(b64_str: str) -> Image.Image:
-    if "," in b64_str:
-        b64_str = b64_str.split(",")[1]
-    return Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
+    if not b64_str or not isinstance(b64_str, str):
+        raise ValueError("Dữ liệu hình ảnh (base64/URL) bị rỗng hoặc không hợp lệ")
+
+    b64_clean = b64_str.strip()
+
+    # Hỗ trợ trực tiếp URL web nếu client gửi link HTTP/HTTPS
+    if b64_clean.startswith("http://") or b64_clean.startswith("https://"):
+        import urllib.request
+        req = urllib.request.Request(b64_clean, headers={"User-Agent": "MangaCleaner/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+            img = Image.open(io.BytesIO(data))
+            return ImageOps.exif_transpose(img)
+
+    # Hỗ trợ đường dẫn file nội bộ nếu có
+    if os.path.exists(b64_clean) and os.path.isfile(b64_clean):
+        img = Image.open(b64_clean)
+        return ImageOps.exif_transpose(img)
+
+    # Tách Data URI prefix (ví dụ: data:image/png;base64,...)
+    if "," in b64_clean:
+        b64_clean = b64_clean.split(",", 1)[1]
+
+    # Loại bỏ khoảng trắng, xuống dòng và chuẩn hóa ký tự Base64 (space thành +)
+    b64_clean = b64_clean.strip().replace(" ", "+").replace("\n", "").replace("\r", "")
+
+    # Chuẩn hóa URL-safe Base64 (- thành +, _ thành /)
+    b64_clean = b64_clean.replace("-", "+").replace("_", "/")
+
+    # Khắc phục triệt để lỗi binascii.Error: Incorrect padding
+    missing_padding = len(b64_clean) % 4
+    if missing_padding == 2:
+        b64_clean += "=="
+    elif missing_padding == 3:
+        b64_clean += "="
+    elif missing_padding == 1:
+        # Nếu lẻ 1 byte lỗi không hợp lệ, cắt bớt ký tự rác cuối cùng
+        b64_clean = b64_clean[:-1]
+
+    try:
+        img_bytes = base64.b64decode(b64_clean)
+    except Exception:
+        # Cơ chế dự phòng fallback với urlsafe decode
+        try:
+            img_bytes = base64.urlsafe_b64decode(b64_clean)
+        except Exception:
+            # Fallback ép bù đủ số dấu =
+            b64_clean_padded = b64_clean + "=" * (-len(b64_clean) % 4)
+            img_bytes = base64.b64decode(b64_clean_padded)
+
+    img = Image.open(io.BytesIO(img_bytes))
+    return ImageOps.exif_transpose(img)
 
 def pil_to_b64(pil_img: Image.Image, fmt="PNG") -> str:
     buf = io.BytesIO()
@@ -786,8 +835,10 @@ def health():
 @api_router.post("/api/clean_page")
 async def api_clean_page(req: CleanPagePayload):
     try:
-        img = b64_to_pil(req.imageBase64)
-        custom_mask = b64_to_pil(req.maskBase64).convert("L") if req.maskBase64 else None
+        img = b64_to_pil(req.imageBase64).convert("RGB")
+        custom_mask = None
+        if req.maskBase64 and req.maskBase64.strip():
+            custom_mask = b64_to_pil(req.maskBase64).convert("L")
         dilation_val = req.dilationPx if req.dilationPx is not None else 8
         thresh_val = req.detThreshold if req.detThreshold is not None else 0.20
         cleaned_pil, mask_pil, stats = await run_in_threadpool(
@@ -805,6 +856,8 @@ async def api_clean_page(req: CleanPagePayload):
             "stats": stats
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Clean Page Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -812,7 +865,9 @@ async def api_clean_page(req: CleanPagePayload):
 @api_router.post("/api/inpaint")
 async def api_inpaint(req: InpaintPayload):
     try:
-        img = b64_to_pil(req.imageBase64)
+        img = b64_to_pil(req.imageBase64).convert("RGB")
+        if not req.maskBase64 or not req.maskBase64.strip():
+            raise HTTPException(status_code=400, detail="Thiếu dữ liệu mask nét vẽ (maskBase64)")
         custom_mask = b64_to_pil(req.maskBase64).convert("L")
         cleaned_pil, mask_pil, stats = await run_in_threadpool(
             cleaner_pipeline.clean_image,
@@ -827,7 +882,11 @@ async def api_inpaint(req: InpaintPayload):
             "maskBase64": pil_to_b64(mask_pil),
             "stats": stats
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Inpaint Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -835,7 +894,7 @@ async def api_inpaint(req: InpaintPayload):
 @api_router.post("/api/detect")
 async def api_detect(req: DetectPayload):
     try:
-        img_pil = b64_to_pil(req.imageBase64)
+        img_pil = b64_to_pil(req.imageBase64).convert("RGB")
         rgb_arr = np.array(img_pil)
         bgr_arr = cv2.cvtColor(rgb_arr, cv2.COLOR_RGB2BGR)
         mask_arr, boxes = cleaner_pipeline.detector.detect_mask(bgr_arr)
@@ -847,6 +906,8 @@ async def api_detect(req: DetectPayload):
             "count": len(boxes)
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Detect Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1310,24 +1371,34 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
     print(f"🌟 Launching Manga Text Cleaner on http://0.0.0.0:{port} ...")
 
-    app, local_url, share_url = demo.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        prevent_thread_lock=True,
-        show_error=True
-    )
+    launch_kwargs = {
+        "server_name": "0.0.0.0",
+        "server_port": port,
+        "prevent_thread_lock": True,
+        "show_error": True,
+    }
+    try:
+        import inspect
+        if "ssr_mode" in inspect.signature(demo.launch).parameters:
+            launch_kwargs["ssr_mode"] = False
+    except Exception:
+        pass
 
-    if hasattr(app, "include_router"):
-        app.include_router(api_router)
+    app, local_url, share_url = demo.launch(**launch_kwargs)
+
+    # Insert custom REST API routes at front (index 0) of Starlette router
+    if hasattr(app, "router") and hasattr(app.router, "routes"):
         try:
-            custom_paths = {r.path for r in api_router.routes}
-            custom_routes = [r for r in app.router.routes if getattr(r, "path", None) in custom_paths]
-            other_routes = [r for r in app.router.routes if r not in custom_routes]
-            app.router.routes = custom_routes + other_routes
-            app.routes = app.router.routes
+            for route in reversed(api_router.routes):
+                app.router.routes.insert(0, route)
             print("✅ Custom REST API routes prioritized at front of routing table.")
         except Exception as e:
-            print(f"⚠️ Reordering routes notice: {e}")
+            print(f"⚠️ Route insertion notice: {e}")
+            if hasattr(app, "include_router"):
+                app.include_router(api_router)
         print("✅ REST API endpoints (/health, /clean_page, /api/clean_page, /inpaint, /detect, /clean_zip) successfully attached to Gradio server!")
+    elif hasattr(app, "include_router"):
+        app.include_router(api_router)
+        print("✅ Attached api_router via include_router.")
 
     demo.block_thread()

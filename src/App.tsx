@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Images, 
   Type, 
@@ -10,6 +10,7 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { CanvasEditor } from './components/CanvasEditor';
 import { BubbleInspector } from './components/BubbleInspector';
+import { PanelSplitter } from './components/PanelSplitter';
 import { ColabModal } from './components/ColabModal';
 import { BatchProcessorModal } from './components/BatchProcessorModal';
 import { OutputFolderModal } from './components/OutputFolderModal';
@@ -25,7 +26,7 @@ import {
   importImagesFromFolderOrFiles
 } from './services/api';
 import { loadSavedColabConfig, saveStoredColabConfig, createSafeObjectURL, revokeSafeObjectURL, revokePageObjectUrls } from './services/storage';
-import { inpaintImageWithLaMa, translateBubbles, cleanPageWithAI } from './services/colabClient';
+import { inpaintImageWithLaMa, translateBubbles, cleanPageWithAI, detectTextRegions } from './services/colabClient';
 import { defaultTextStyle, renderBubbleOnCanvas } from './services/typesettingEngine';
 import { triggerSelectionHaptic } from './services/haptics';
 
@@ -74,6 +75,77 @@ export const App: React.FC = () => {
   const [isColabModalOpen, setIsColabModalOpen] = useState<boolean>(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
   const [isOutputModalOpen, setIsOutputModalOpen] = useState<boolean>(false);
+
+  // Studio Proportional Layout States (Percentages & Resizing)
+  const [layoutRatios, setLayoutRatios] = useState<{ left: number; right: number }>(() => {
+    try {
+      const saved = localStorage.getItem('manga_studio_layout_ratios');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          typeof parsed.left === 'number' &&
+          typeof parsed.right === 'number' &&
+          parsed.left >= 10 &&
+          parsed.left <= 40 &&
+          parsed.right >= 15 &&
+          parsed.right <= 45
+        ) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return { left: 19, right: 25 }; // Default: Sidebar 19%, Canvas 56%, Inspector 25%
+  });
+
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isInspectorCollapsed, setIsInspectorCollapsed] = useState<boolean>(false);
+  const workspaceContainerRef = useRef<HTMLDivElement>(null);
+
+  const updateLayoutRatios = useCallback((updater: (prev: { left: number; right: number }) => { left: number; right: number }) => {
+    setLayoutRatios((prev) => {
+      const next = updater(prev);
+      try {
+        localStorage.setItem('manga_studio_layout_ratios', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  const handleResizeLeft = useCallback((deltaX: number) => {
+    if (!workspaceContainerRef.current) return;
+    const containerWidth = workspaceContainerRef.current.clientWidth;
+    if (containerWidth <= 0) return;
+
+    if (isSidebarCollapsed && deltaX > 5) {
+      setIsSidebarCollapsed(false);
+    }
+
+    const deltaPercent = (deltaX / containerWidth) * 100;
+    updateLayoutRatios((prev) => {
+      const newLeft = Math.min(Math.max(prev.left + deltaPercent, 12), 35);
+      return { ...prev, left: Math.round(newLeft * 10) / 10 };
+    });
+  }, [isSidebarCollapsed, updateLayoutRatios]);
+
+  const handleResizeRight = useCallback((deltaX: number) => {
+    if (!workspaceContainerRef.current) return;
+    const containerWidth = workspaceContainerRef.current.clientWidth;
+    if (containerWidth <= 0) return;
+
+    if (isInspectorCollapsed && deltaX < -5) {
+      setIsInspectorCollapsed(false);
+    }
+
+    const deltaPercent = (-deltaX / containerWidth) * 100;
+    updateLayoutRatios((prev) => {
+      const newRight = Math.min(Math.max(prev.right + deltaPercent, 16), 40);
+      return { ...prev, right: Math.round(newRight * 10) / 10 };
+    });
+  }, [isInspectorCollapsed, updateLayoutRatios]);
+
+  const handleResetRatios = useCallback(() => {
+    updateLayoutRatios(() => ({ left: 19, right: 25 }));
+  }, [updateLayoutRatios]);
 
   // Output Folder Config (persisted across sessions)
   const [outputConfig, setOutputConfig] = useState<OutputFolderConfig>(() => {
@@ -460,7 +532,15 @@ export const App: React.FC = () => {
   // Manual brush inpaint (if connected to an AI inpaint backend)
   const handleManualInpaintArea = async (maskBase64: string) => {
     if (!currentImage) return;
+    if (!colabConfig.serverUrl) {
+      showToast('error', 'Chưa kết nối Máy Chủ AI. Vui lòng bấm vào "Máy Chủ AI" trên đầu trang để nhập địa chỉ server.', 'Chưa Có Máy Chủ');
+      setIsColabModalOpen(true);
+      return;
+    }
+
     setIsProcessing(true);
+    setProcessingStatus('Đang gửi vùng nét vẽ và xóa nền bằng LaMa...');
+    showToast('info', 'Đang gửi yêu cầu xóa vùng cọ vẽ tới máy chủ AI...', 'Đang Xử Lý');
     try {
       const sourceImg = cleanedImageBase64 || currentImage.rawUrl;
       const cleaned = await inpaintImageWithLaMa(colabConfig.serverUrl, sourceImg, maskBase64);
@@ -470,11 +550,16 @@ export const App: React.FC = () => {
         if (selectedFilename) {
           await saveProjectMetadata(selectedFilename, bubbles, cleaned);
         }
+        showToast('success', 'Đã xóa nền vùng cọ vẽ thành công!', 'Xóa Hoàn Tất');
+      } else {
+        showToast('error', 'Máy chủ không trả về kết quả xóa. Vui lòng kiểm tra lại URL máy chủ.', 'Lỗi Xóa Nền');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Manual inpaint failed:', e);
+      showToast('error', `Lỗi xóa nét vẽ: ${e?.message || e}`, 'Lỗi Kết Nối AI');
     } finally {
       setIsProcessing(false);
+      setProcessingStatus('');
     }
   };
 
@@ -482,13 +567,14 @@ export const App: React.FC = () => {
   const handleAutoCleanPage = async () => {
     if (!currentImage) return;
     if (!colabConfig.serverUrl) {
-      alert('Vui lòng kết nối Colab GPU trước khi dùng tính năng AI Làm Sạch Trang.');
+      showToast('error', 'Chưa kết nối Máy Chủ AI. Vui lòng bấm vào "Máy Chủ AI" trên đầu trang để nhập địa chỉ server.', 'Chưa Có Máy Chủ');
       setIsColabModalOpen(true);
       return;
     }
 
     setIsCleaningPage(true);
-    setProcessingStatus('Đang quét ký tự & khôi phục chi tiết bằng IOPaint...');
+    setProcessingStatus('Đang gửi ảnh & quét sạch chữ bằng AI...');
+    showToast('info', 'Đang quét ký tự và xóa chữ toàn trang trên server...', 'Đang Xử Lý');
     try {
       const sourceImg = currentImage.rawUrl;
       const res = await cleanPageWithAI(colabConfig.serverUrl, sourceImg, {
@@ -497,19 +583,41 @@ export const App: React.FC = () => {
       });
 
       if (res.success && res.cleanedImageBase64) {
-        pushHistory(res.cleanedImageBase64, bubbles);
+        let updatedBubbles = [...bubbles];
+        try {
+          const detectRes = await detectTextRegions(colabConfig.serverUrl, sourceImg);
+          if (detectRes.success && detectRes.boxes && detectRes.boxes.length > 0) {
+            const newBubbles: Bubble[] = detectRes.boxes.map((box, idx) => ({
+              id: `bubble_${Date.now()}_${idx}`,
+              x: box.x,
+              y: box.y,
+              width: box.width,
+              height: box.height,
+              originalText: '',
+              translatedText: 'Nhập chữ dịch...',
+              style: { ...defaultTextStyle },
+              isInpainted: true,
+            }));
+            updatedBubbles = newBubbles;
+            setBubbles(newBubbles);
+          }
+        } catch (detErr) {
+          console.warn('Auto detect boxes notice:', detErr);
+        }
+
+        pushHistory(res.cleanedImageBase64, updatedBubbles);
         setCleanedImageBase64(res.cleanedImageBase64);
         if (selectedFilename) {
-          await saveProjectMetadata(selectedFilename, bubbles, res.cleanedImageBase64);
+          await saveProjectMetadata(selectedFilename, updatedBubbles, res.cleanedImageBase64);
         }
         const regions = res.stats?.total_regions ?? (res.stats?.regions ?? (res.stats?.lama ?? 0));
-        const modelName = res.stats?.model ? ` (${res.stats.model})` : '';
-        alert(`🎉 Đã làm sạch trang bằng IOPaint${modelName} thành công!\n• Số vùng chữ đã xóa & khôi phục: ${regions}`);
+        const bubbleNotice = updatedBubbles.length > 0 ? ` và đã tạo ${updatedBubbles.length} ô thoại dịch` : '';
+        showToast('success', `Đã làm sạch trang bằng AI (${regions} vùng chữ)${bubbleNotice}!`, 'Xóa Hoàn Tất');
       } else {
-        alert(`⚠️ Xử lý thất bại: ${res.error || 'Vui lòng kiểm tra lại Colab Server.'}`);
+        showToast('error', `Xử lý thất bại: ${res.error || 'Vui lòng kiểm tra lại Colab Server.'}`, 'Lỗi Xóa Trang');
       }
     } catch (e: any) {
-      alert(`❌ Lỗi kết nối AI: ${e?.message || e}`);
+      showToast('error', `Lỗi kết nối AI: ${e?.message || e}`, 'Lỗi Kết Nối');
     } finally {
       setIsCleaningPage(false);
       setProcessingStatus('');
@@ -578,7 +686,7 @@ export const App: React.FC = () => {
       />
 
       {/* Main Studio Workspace */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div ref={workspaceContainerRef} className="flex-1 flex overflow-hidden relative">
         {/* Mobile Backdrop Overlay */}
         {(isMobileSidebarOpen || isMobileInspectorOpen) && (
           <div
@@ -607,6 +715,19 @@ export const App: React.FC = () => {
           isLoading={isLoadingImages}
           isOpenMobile={isMobileSidebarOpen}
           onCloseMobile={() => setIsMobileSidebarOpen(false)}
+          width={`${layoutRatios.left}%`}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={setIsSidebarCollapsed}
+        />
+
+        {/* Left Splitter */}
+        <PanelSplitter
+          direction="left"
+          onResize={handleResizeLeft}
+          onDoubleClick={handleResetRatios}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          title="Kéo để chỉnh độ rộng Thư viện ảnh (Nhấp đúp để đặt lại 19%)"
         />
 
         {/* Center: Canvas Editor */}
@@ -623,6 +744,7 @@ export const App: React.FC = () => {
           onManualInpaintArea={handleManualInpaintArea}
           onAutoCleanPage={handleAutoCleanPage}
           isCleaningPage={isCleaningPage}
+          isProcessing={isProcessing}
           isColabConnected={colabConfig.connected}
           onOpenColabModal={() => setIsColabModalOpen(true)}
           onAddImages={handleAddImages}
@@ -631,6 +753,16 @@ export const App: React.FC = () => {
           canUndo={historyIndex > 0}
           canRedo={historyIndex < history.length - 1}
           onResetCleaned={handleResetCleaned}
+        />
+
+        {/* Right Splitter */}
+        <PanelSplitter
+          direction="right"
+          onResize={handleResizeRight}
+          onDoubleClick={handleResetRatios}
+          isCollapsed={isInspectorCollapsed}
+          onToggleCollapse={() => setIsInspectorCollapsed(!isInspectorCollapsed)}
+          title="Kéo để chỉnh độ rộng Bảng thuộc tính (Nhấp đúp để đặt lại 25%)"
         />
 
         {/* Right: Bubble Property Inspector */}
@@ -664,11 +796,14 @@ export const App: React.FC = () => {
           }}
           isOpenMobile={isMobileInspectorOpen}
           onCloseMobile={() => setIsMobileInspectorOpen(false)}
+          width={`${layoutRatios.right}%`}
+          isCollapsed={isInspectorCollapsed}
+          onToggleCollapse={setIsInspectorCollapsed}
         />
       </div>
 
       {/* Mobile Bottom Navigation Bar */}
-      <nav className="mobile-bottom-nav">
+      <nav className="mobile-bottom-nav mobile-only">
         <button
           onClick={() => {
             triggerSelectionHaptic();

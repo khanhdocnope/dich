@@ -40,6 +40,7 @@ interface CanvasEditorProps {
   onManualInpaintArea?: (maskBase64: string) => void;
   onAutoCleanPage?: () => void;
   isCleaningPage?: boolean;
+  isProcessing?: boolean;
   isColabConnected?: boolean;
   onOpenColabModal?: () => void;
   onAddImages?: (files: FileList | File[]) => void;
@@ -63,6 +64,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   onManualInpaintArea,
   onAutoCleanPage,
   isCleaningPage = false,
+  isProcessing = false,
   isColabConnected = false,
   onOpenColabModal,
   onAddImages,
@@ -342,27 +344,25 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
     const currentZ = zoomRef.current;
 
-    // 4. Selection Outline & 8-point Resize Handles for Active Bubble (Figma Marching Ants & Neon Glow)
+    // 4. Selection Outline & 8-point Resize Handles for Active Bubble
     if (selectedBubbleId && viewLayer !== 'original') {
       const selected = bubbles.find((b) => b.id === selectedBubbleId);
       if (selected) {
         ctx.save();
 
-        // Outer Glow Halo
-        ctx.shadowColor = 'rgba(99, 102, 241, 0.85)';
-        ctx.shadowBlur = 12 / currentZ;
-        ctx.strokeStyle = '#312e81';
-        ctx.lineWidth = 3 / currentZ;
-        ctx.strokeRect(selected.x, selected.y, selected.width, selected.height);
-
-        // Inner Animated Marching Ants Dashed Stroke
+        // Clean, Solid Professional Selection Outline (No dashed marching ants / No irritating dots)
+        ctx.shadowColor = 'rgba(99, 102, 241, 0.35)';
+        ctx.shadowBlur = 6 / currentZ;
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 1.5 / currentZ;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(selected.x, selected.y, selected.width, selected.height, 4);
+        } else {
+          ctx.rect(selected.x, selected.y, selected.width, selected.height);
+        }
+        ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.strokeStyle = '#a5b4fc';
-        ctx.lineWidth = 2 / currentZ;
-        ctx.lineDashOffset = -dashOffsetRef.current;
-        ctx.setLineDash([6 / currentZ, 4 / currentZ]);
-        ctx.strokeRect(selected.x, selected.y, selected.width, selected.height);
-        ctx.setLineDash([]);
 
         // 8 Figma-style handles with white center and indigo border
         const handleSize = Math.max(5, 7 / currentZ);
@@ -394,13 +394,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
     // 5. Live Drag-to-Draw Preview Box
     if (isDrawingNewBubble && currentDrawBox) {
       ctx.save();
-      ctx.fillStyle = 'rgba(99, 102, 241, 0.22)';
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.18)';
       ctx.strokeStyle = '#6366f1';
-      ctx.lineWidth = 2 / currentZ;
-      ctx.setLineDash([6 / currentZ, 4 / currentZ]);
+      ctx.lineWidth = 1.5 / currentZ;
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {
-        ctx.roundRect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height, 8);
+        ctx.roundRect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height, 6);
       } else {
         ctx.rect(currentDrawBox.x, currentDrawBox.y, currentDrawBox.width, currentDrawBox.height);
       }
@@ -536,6 +535,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       cleanedImgRef.current = img;
       updateOffscreenBgRef.current();
       scheduleRenderRef.current();
+      handleClearMask();
     };
     img.src = cleanedImageBase64;
 
@@ -757,9 +757,16 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
           h: clickedBubble.height,
         });
       } else {
-        onSelectBubble(null);
-        setIsPanning(true);
-        setStartPan({ x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y });
+        if (editingBubbleId) {
+          // Vừa chỉnh sửa xong nhấp chuột ra ngoài: Giữ nguyên khung chọn của bubble để không bị tàng hình
+          onSelectBubble(editingBubbleId);
+          setEditingBubbleId(null);
+          onCommitHistory?.();
+        } else {
+          onSelectBubble(null);
+          setIsPanning(true);
+          setStartPan({ x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y });
+        }
       }
     }
   };
@@ -1189,36 +1196,45 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
   };
 
   const handleApplyMaskInpaint = () => {
-    if (!maskCanvasRef.current || !onManualInpaintArea) return;
-    const { width, height } = imgDimensions;
+    if (!maskCanvasRef.current || !onManualInpaintArea || isProcessing) return;
+    const maskCanvas = maskCanvasRef.current;
+    const width = maskCanvas.width || imgDimensions.width;
+    const height = maskCanvas.height || imgDimensions.height;
+    if (width <= 0 || height <= 0) return;
 
-    // Convert transparent red mask into pure black & white binary mask for LaMa
+    const mctx = maskCanvas.getContext('2d');
+    if (!mctx) return;
+
+    // Lấy dữ liệu nét vẽ trực tiếp từ maskCanvas (nơi người dùng tô bằng cọ)
+    // Các vùng chưa vẽ có alpha = 0; các vùng đã tô cọ đỏ có alpha > 0
+    const srcData = mctx.getImageData(0, 0, width, height);
+    const src = srcData.data;
+
+    // Tạo canvas mask nhị phân: Nền đen tuyền (0, 0, 0, 255), Vùng nét cọ tô trắng (255, 255, 255, 255)
     const binaryCanvas = document.createElement('canvas');
     binaryCanvas.width = width;
     binaryCanvas.height = height;
     const bctx = binaryCanvas.getContext('2d');
     if (!bctx) return;
 
-    bctx.fillStyle = '#000000';
-    bctx.fillRect(0, 0, width, height);
-
-    bctx.drawImage(maskCanvasRef.current, 0, 0);
-    const imgData = bctx.getImageData(0, 0, width, height);
-    const d = imgData.data;
+    const outData = bctx.createImageData(width, height);
+    const out = outData.data;
     let hasMask = false;
 
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i + 3] > 20 || d[i] > 50) {
-        d[i] = 255;
-        d[i + 1] = 255;
-        d[i + 2] = 255;
-        d[i + 3] = 255;
+    for (let i = 0; i < src.length; i += 4) {
+      const alpha = src[i + 3];
+      // CHỈ các pixel mà người dùng thực sự tô cọ (alpha > 20) mới là mask cần xóa
+      if (alpha > 20) {
+        out[i] = 255;     // R
+        out[i + 1] = 255; // G
+        out[i + 2] = 255; // B
+        out[i + 3] = 255; // A (Trắng tuyền)
         hasMask = true;
       } else {
-        d[i] = 0;
-        d[i + 1] = 0;
-        d[i + 2] = 0;
-        d[i + 3] = 255;
+        out[i] = 0;       // R
+        out[i + 1] = 0;   // G
+        out[i + 2] = 0;   // B
+        out[i + 3] = 255; // A (Đen tuyền)
       }
     }
 
@@ -1227,10 +1243,9 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
       return;
     }
 
-    bctx.putImageData(imgData, 0, 0);
+    bctx.putImageData(outData, 0, 0);
     const maskBase64 = binaryCanvas.toDataURL('image/png');
     onManualInpaintArea(maskBase64);
-    handleClearMask();
   };
 
   // Drag and Drop File Handlers
@@ -1340,7 +1355,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
       {/* Top Floating Studio Toolbar (Only shown when an image is loaded) */}
       {rawImageUrl && (
-        <div className="canvas-floating-toolbar">
+        <div className="canvas-toolbar-container">
+          <div className="canvas-floating-toolbar">
           {/* Tool Segment */}
           <div className="segmented-group">
             <button
@@ -1518,72 +1534,90 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             </button>
           </div>
         </div>
+      </div>
       )}
 
       {/* Dedicated Mask Brush Sub-Toolbar (When Brush is active) */}
       {rawImageUrl && activeTool === 'brush' && (
-        <div className="canvas-brush-toolbar flex-wrap">
-          {/* Brush / Eraser Mode Toggle */}
-          <div className="segmented-group">
+        <div className="canvas-brush-container">
+          <div className="canvas-brush-toolbar">
+            {/* Brush / Eraser Mode Toggle */}
+            <div className="segmented-group shrink-0">
+              <button
+                onClick={() => setBrushMode('brush')}
+                className={`segmented-btn ${brushMode === 'brush' ? 'active' : ''}`}
+                title="Cọ tô vùng cần xóa"
+              >
+                <Brush className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span className="whitespace-nowrap">Cọ Tô</span>
+              </button>
+              <button
+                onClick={() => setBrushMode('eraser')}
+                className={`segmented-btn ${brushMode === 'eraser' ? 'active' : ''}`}
+                title="Tẩy bớt vùng chọn nhầm"
+              >
+                <Eraser className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="whitespace-nowrap">Cục Tẩy</span>
+              </button>
+            </div>
+
+            <div className="h-4 w-px bg-white/10 shrink-0 mx-0.5" />
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-xs font-medium text-slate-300">Cỡ:</span>
+              <input
+                type="range"
+                min="10"
+                max="120"
+                value={brushSize}
+                onChange={(e) => setBrushSize(Number(e.target.value))}
+                className="w-20 sm:w-28 accent-red-500 cursor-pointer h-1.5 bg-slate-700 rounded-lg"
+              />
+              <span className="text-xs font-mono text-red-300 min-w-[32px]">{brushSize}px</span>
+            </div>
+
+            <div className="h-4 w-px bg-white/10 shrink-0 mx-0.5" />
+
             <button
-              onClick={() => setBrushMode('brush')}
-              className={`segmented-btn ${brushMode === 'brush' ? 'active' : ''}`}
-              title="Cọ tô vùng cần xóa"
+              onClick={handleClearMask}
+              disabled={isProcessing}
+              className="px-2.5 py-1.5 bg-slate-800/90 hover:bg-slate-700/90 text-slate-300 hover:text-white rounded-lg text-xs font-medium transition-all shrink-0 whitespace-nowrap border border-white/10 disabled:opacity-50"
+              title="Xóa toàn bộ vùng chọn đỏ đã vẽ"
             >
-              <Brush className="w-3.5 h-3.5 text-red-400" />
-              <span>Cọ Tô</span>
+              Xóa nét vẽ
             </button>
+
+            {canUndo && (
+              <button
+                onClick={onUndo}
+                disabled={isProcessing}
+                className="px-2.5 py-1.5 bg-indigo-950/70 border border-indigo-700/60 hover:bg-indigo-900/80 text-indigo-300 rounded-lg text-xs font-medium transition-all flex items-center space-x-1 shrink-0 whitespace-nowrap disabled:opacity-50"
+                title="Hoàn tác vết xóa trước (Ctrl + Z)"
+              >
+                <Undo2 className="w-3 h-3 shrink-0" />
+                <span>Hoàn Tác</span>
+              </button>
+            )}
+
             <button
-              onClick={() => setBrushMode('eraser')}
-              className={`segmented-btn ${brushMode === 'eraser' ? 'active' : ''}`}
-              title="Tẩy bớt vùng chọn nhầm"
+              onClick={handleApplyMaskInpaint}
+              disabled={isProcessing}
+              className="flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white rounded-lg text-xs font-semibold shadow-lg shadow-red-500/25 transition-all shrink-0 whitespace-nowrap active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed border border-red-400/30"
+              title="Gửi vùng chọn tới mô hình LaMa Inpainting để khôi phục nét vẽ"
             >
-              <Eraser className="w-3.5 h-3.5 text-amber-400" />
-              <span>Cục Tẩy</span>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-white shrink-0" />
+                  <span className="whitespace-nowrap font-medium">Đang Xóa LaMa...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-white shrink-0" />
+                  <span className="whitespace-nowrap font-medium">Xóa Nền Vùng Này (LaMa)</span>
+                </>
+              )}
             </button>
           </div>
-
-          <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-            <span>Cỡ:</span>
-          </span>
-          <input
-            type="range"
-            min="10"
-            max="120"
-            value={brushSize}
-            onChange={(e) => setBrushSize(Number(e.target.value))}
-            className="w-24 accent-red-500 cursor-pointer"
-          />
-          <span className="text-xs font-mono text-red-200 w-8">{brushSize}px</span>
-
-          <button
-            onClick={handleClearMask}
-            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-all"
-            title="Xóa toàn bộ vùng chọn đỏ đã vẽ"
-          >
-            Xóa nét vẽ
-          </button>
-
-          {canUndo && (
-            <button
-              onClick={onUndo}
-              className="px-2.5 py-1 bg-indigo-950/60 border border-indigo-700/60 hover:bg-indigo-900 text-indigo-300 rounded-lg text-xs transition-all flex items-center space-x-1"
-              title="Hoàn tác vết xóa trước (Ctrl + Z)"
-            >
-              <Undo2 className="w-3 h-3" />
-              <span>Hoàn Tác</span>
-            </button>
-          )}
-
-          <button
-            onClick={handleApplyMaskInpaint}
-            className="btn-primary"
-            style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
-            title="Gửi vùng chọn tới mô hình LaMa Inpainting để khôi phục nét vẽ"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Xóa Nền Vùng Này (LaMa)</span>
-          </button>
         </div>
       )}
 
@@ -1649,10 +1683,15 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
             />
             <canvas ref={maskCanvasRef} className="hidden" />
 
-            {/* Floating Inline Text Editor on Double Click */}
+            {/* Direct In-Place Text Editor (Excel / Photoshop Style) */}
             {(() => {
               const activeEditingBubble = bubbles.find((b) => b.id === editingBubbleId);
               if (!activeEditingBubble) return null;
+
+              const style = activeEditingBubble.style;
+              const bg = style.backgroundOpacity > 0
+                ? (style.backgroundColor || '#ffffff')
+                : 'rgba(255, 255, 255, 0.95)';
 
               return (
                 <div
@@ -1660,27 +1699,17 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                     position: 'absolute',
                     left: activeEditingBubble.x,
                     top: activeEditingBubble.y,
-                    width: Math.max(160, activeEditingBubble.width),
-                    minHeight: Math.max(80, activeEditingBubble.height),
+                    width: activeEditingBubble.width,
+                    minHeight: activeEditingBubble.height,
                     zIndex: 100,
                   }}
-                  className="bg-slate-900/95 border-2 border-indigo-500 rounded-xl p-2 shadow-2xl backdrop-blur-md flex flex-col gap-1.5"
+                  className="animate-in fade-in duration-75"
                   onClick={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                 >
-                  <div className="flex items-center justify-between text-[11px] font-semibold text-indigo-300 pb-1 border-b border-indigo-500/30 select-none">
-                    <span>✏️ Sửa Chữ Nhanh (Enter để lưu)</span>
-                    <button
-                      onClick={() => setEditingBubbleId(null)}
-                      className="text-slate-400 hover:text-white px-1 font-bold"
-                    >
-                      ✕
-                    </button>
-                  </div>
                   <textarea
                     autoFocus
-                    rows={3}
                     value={inlineEditText}
                     onChange={(e) => {
                       setInlineEditText(e.target.value);
@@ -1689,16 +1718,42 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
                         translatedText: e.target.value,
                       });
                     }}
+                    onBlur={() => {
+                      setEditingBubbleId(null);
+                      onCommitHistory?.();
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         setEditingBubbleId(null);
+                        onCommitHistory?.();
                       } else if (e.key === 'Escape') {
                         setEditingBubbleId(null);
                       }
                     }}
-                    placeholder="Nhập nội dung thoại dịch..."
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-white text-xs font-sans focus:outline-none focus:border-indigo-400 resize-none"
+                    placeholder="Nhập nội dung thoại..."
+                    style={{
+                      width: '100%',
+                      minHeight: `${activeEditingBubble.height}px`,
+                      height: '100%',
+                      fontFamily: style.fontFamily,
+                      fontSize: `${style.fontSize}px`,
+                      fontWeight: style.fontWeight || '700',
+                      fontStyle: style.isItalic ? 'italic' : 'normal',
+                      textAlign: style.textAlign || 'center',
+                      color: style.color || '#000000',
+                      lineHeight: style.lineHeight || 1.25,
+                      padding: `${style.boxPadding || 4}px`,
+                      backgroundColor: bg,
+                      border: '2px solid #2563eb', // Excel active cell border
+                      borderRadius: `${style.borderRadius || 4}px`,
+                      boxShadow: '0 0 0 2px rgba(37, 99, 235, 0.35), 0 4px 14px rgba(0, 0, 0, 0.35)',
+                      outline: 'none',
+                      resize: 'none',
+                      overflow: 'hidden',
+                      display: 'block',
+                      boxSizing: 'border-box',
+                    }}
                   />
                 </div>
               );
@@ -1750,7 +1805,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
       {/* Mini-map Navigator HUD (Photoshop / Figma Standard) */}
       {rawImageUrl && (
-        <div className="desktop-only absolute bottom-3 right-4 z-20 select-none">
+        <div className="canvas-minimap-container desktop-only select-none">
           <div className="navigator-hud bg-slate-950/90 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden backdrop-blur-xl transition-all w-48">
             {/* Header */}
             <div className="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-200 font-semibold">
@@ -1812,7 +1867,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({
 
       {/* Bottom Status Hint Bar */}
       {rawImageUrl && (
-        <div className="desktop-only absolute bottom-3 left-4 z-20 items-center space-x-3 text-[11px] text-slate-400 bg-slate-900/80 backdrop-blur-md px-3 py-1 rounded-lg border border-slate-800">
+        <div className="canvas-status-hint desktop-only">
           <span>💡 <strong>Lăn chuột:</strong> Phóng to/thu nhỏ</span>
           <span>•</span>
           <span><strong>Space + Kéo chuột:</strong> Di chuyển ảnh</span>

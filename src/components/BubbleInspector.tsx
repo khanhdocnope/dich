@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { 
   Type, 
   Trash2, 
@@ -10,12 +10,20 @@ import {
   Palette, 
   Sliders, 
   Plus, 
+  Minus,
   Languages, 
   Square,
+  Circle,
+  MessageSquare,
+  Zap,
+  Cloud,
+  Frame,
   Sparkles,
   Layers,
   CircleDot,
-  X
+  X,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { Bubble, TextStyle } from '../types';
 import { defaultTextStyle } from '../services/typesettingEngine';
@@ -32,19 +40,33 @@ interface BubbleInspectorProps {
   onCommitHistory?: () => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  width?: string;
+  isCollapsed?: boolean;
+  onToggleCollapse?: (collapsed: boolean) => void;
 }
 
 const FONT_OPTIONS = [
   { label: 'Nunito (Manga Bo Tròn Việt Hóa 100%)', value: "'Nunito', sans-serif" },
-  { label: 'Be Vietnam Pro (Chuẩn Việt Hóa Đội Dịch)', value: "'Be Vietnam Pro', sans-serif" },
-  { label: 'Itim (Nét Bút Tay Manga Việt Hóa)', value: "'Itim', cursive, sans-serif" },
-  { label: 'Pangolin (Dễ Thương / Truyện Hài)', value: "'Pangolin', cursive, sans-serif" },
-  { label: 'Balsamiq Sans (Phong Cách Manga Trẻ)', value: "'Balsamiq Sans', cursive, sans-serif" },
-  { label: 'Mali (Chữ Vẽ Tay Manga Việt Hóa)', value: "'Mali', cursive, sans-serif" },
-  { label: 'Comfortaa (Bo Tròn Nhẹ Nhàng)', value: "'Comfortaa', cursive, sans-serif" },
-  { label: 'Saira (Chữ Hét Lớn / Kịch Tính)', value: "'Saira Semi Condensed', sans-serif" },
-  { label: 'Montserrat (Chữ Đậm Khí Thế)', value: "'Montserrat', sans-serif" },
-  { label: 'Inter (Hiện Đại Sạch Sẽ)', value: "'Inter', sans-serif" },
+  { label: 'Yuki Arenzi (Manga Thoại Thường)', value: "'Yuki-Arenzi', sans-serif" },
+  { label: 'Yuki Burobu (Chữ Nổi Bật / SFX)', value: "'Yuki-Burobu', sans-serif" },
+  { label: 'Yuki CCMarianChurchlandJournal', value: "'Yuki-CCMarianChurchlandJournal', cursive, sans-serif" },
+  { label: 'Yuki CDX Starstreak (Hành Động / SFX)', value: "'Yuki-CDX Starstreak', sans-serif" },
+  { label: 'Yuki CHICKEN Pie (Vui Nhộn / Hài Hước)', value: "'Yuki-CHICKEN Pie', cursive, sans-serif" },
+  { label: 'Yuki CrashLanding BB (Hét / Kịch Tính)', value: "'Yuki-CrashLanding BB', sans-serif" },
+  { label: 'Yuki Downhill Dive (SFX / Tốc Độ)', value: "'Yuki-Downhill Dive', sans-serif" },
+  { label: 'Yuki Gingerline DEMO (Viết Tay Dễ Thương)', value: "'Yuki-Gingerline DEMO', cursive, sans-serif" },
+  { label: 'Yuki Gorrilaz Story (Thoại Đặc Biệt)', value: "'Yuki-Gorrilaz Story', sans-serif" },
+  { label: 'Yuki KG Only Angel (Nhẹ Nhàng / Nữ Tính)', value: "'Yuki-KG Only Angel', cursive, sans-serif" },
+  { label: 'Yuki LF SwandsHand (Nét Bút Tay Manga)', value: "'Yuki-LF SwandsHand', cursive, sans-serif" },
+  { label: 'Yuki La Belle Aurore (Nét Mực Mềm Mại)', value: "'Yuki-La Belle Aurore', cursive, sans-serif" },
+  { label: 'Yuki Little Cupcakes (Dễ Thương / Chibi)', value: "'Yuki-Little Cupcakes', cursive, sans-serif" },
+  { label: 'Yuki Nagurigaki Crayon (Nét Sáp Màu / SFX)', value: "'Yuki-Nagurigaki Crayon', cursive, sans-serif" },
+  { label: 'Yuki Ripsnort BB (Manga Kinh Dị / Gào Thét)', value: "'Yuki-Ripsnort BB', sans-serif" },
+  { label: 'Yuki Roasthink (Thoại Suy Nghĩ)', value: "'Yuki-Roasthink', cursive, sans-serif" },
+  { label: 'Yuki Screwball (Hài Hước / Tinh Nghịch)', value: "'Yuki-Screwball', cursive, sans-serif" },
+  { label: 'Yuki Skulduggery (SFX / Mạnh Mẽ)', value: "'Yuki-Skulduggery', sans-serif" },
+  { label: 'Yuki Superscratchy (Cào Xước / SFX Rùng Rợn)', value: "'Yuki-Superscratchy', cursive, sans-serif" },
+  { label: 'Yuki Tea And Oranges (Nhẹ Nhàng / Hồi Ức)', value: "'Yuki-Tea And Oranges', cursive, sans-serif" },
 ];
 
 export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
@@ -58,7 +80,21 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
   onCommitHistory,
   isOpenMobile = false,
   onCloseMobile,
+  width,
+  isCollapsed: controlledCollapsed,
+  onToggleCollapse,
 }) => {
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
+
+  const toggleCollapsed = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse(!isCollapsed);
+    } else {
+      setInternalCollapsed(!isCollapsed);
+    }
+  };
+
   const selectedBubble = bubbles.find((b) => b.id === selectedBubbleId);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -124,7 +160,12 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
   };
 
   return (
-    <aside className={`inspector-drawer ${isOpenMobile ? 'open' : ''} w-80 h-full glass-panel border-l border-slate-800 flex flex-col z-20 select-none`}>
+    <aside
+      className={`inspector-drawer ${isOpenMobile ? 'open' : ''} h-full glass-panel border-l border-slate-800 transition-all duration-200 flex flex-col z-20 select-none ${
+        isCollapsed ? 'w-14' : !width ? 'w-80' : ''
+      }`}
+      style={!isOpenMobile && !isCollapsed && width ? { width, minWidth: '240px', maxWidth: '45%' } : undefined}
+    >
       {/* Mobile Bottom Sheet Pull Pill Handle */}
       <div className="mobile-only flex justify-center w-full pt-1 pb-0.5">
         <div className="bottom-sheet-drag-handle" />
@@ -132,24 +173,28 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
 
       {/* Header */}
       <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <Type className="w-4 h-4 text-indigo-400" />
-          <h2 className="font-semibold text-xs tracking-wide uppercase text-slate-200">
-            Bong Bóng Thoại ({bubbles.length})
-          </h2>
-        </div>
-        <div className="flex items-center space-x-1.5">
-          <button
-            onClick={() => {
-              triggerImpactHaptic();
-              onAddBubble();
-            }}
-            className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center space-x-1 text-xs"
-            title="Tạo thêm ô thoại mới"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Thêm Ô</span>
-          </button>
+        {!isCollapsed && (
+          <div className="flex items-center space-x-2 truncate">
+            <Type className="w-4 h-4 text-indigo-400 shrink-0" />
+            <h2 className="font-semibold text-xs tracking-wide uppercase text-slate-200 truncate">
+              Bong Bóng Thoại ({bubbles.length})
+            </h2>
+          </div>
+        )}
+        <div className="flex items-center space-x-1.5 ml-auto">
+          {!isCollapsed && (
+            <button
+              onClick={() => {
+                triggerImpactHaptic();
+                onAddBubble();
+              }}
+              className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 transition-all flex items-center space-x-1 text-xs"
+              title="Tạo thêm ô thoại mới"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Thêm Ô</span>
+            </button>
+          )}
           {onCloseMobile && (
             <button
               onClick={onCloseMobile}
@@ -159,10 +204,40 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
               <X className="w-4 h-4 text-slate-300" />
             </button>
           )}
+          <button
+            onClick={toggleCollapsed}
+            className="desktop-only p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+            title={isCollapsed ? "Mở rộng bảng thuộc tính" : "Thu gọn"}
+          >
+            {isCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 
-      {/* Bubble List Selector Tabs */}
+      {/* Collapsed view icons on Desktop */}
+      {isCollapsed && (
+        <div className="flex-1 overflow-y-auto p-2 space-y-3 flex flex-col items-center">
+          <div className="p-2 rounded-lg bg-indigo-950/60 text-indigo-400 border border-indigo-800/40 text-center" title={`${bubbles.length} bong bóng thoại`}>
+            <Type className="w-4 h-4 mx-auto mb-1" />
+            <span className="text-[10px] font-bold">{bubbles.length}</span>
+          </div>
+          <button
+            onClick={() => {
+              triggerImpactHaptic();
+              onAddBubble();
+            }}
+            className="w-10 h-10 rounded-xl bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 flex items-center justify-center transition-all shadow"
+            title="Tạo thêm ô thoại mới"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Expanded view content */}
+      {!isCollapsed && (
+        <>
+          {/* Bubble List Selector Tabs */}
       <div className="p-2 border-b border-slate-800/60 overflow-x-auto flex space-x-1.5 shrink-0">
         {bubbles.map((b, idx) => (
           <button
@@ -383,11 +458,11 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                 </select>
               </div>
 
-              {/* Font Size & Auto-fit */}
+              {/* Font Size & Stepper & Auto-fit */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
-                  <label className="text-[10px] text-slate-400">Cỡ chữ (px):</label>
-                  <label className="flex items-center space-x-1 text-[11px] text-indigo-400 cursor-pointer">
+                  <label className="text-[10px] text-slate-400 font-medium">Cỡ chữ (px):</label>
+                  <label className="flex items-center space-x-1 text-[11px] text-indigo-400 cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={selectedBubble.style.autoFontSize}
@@ -397,23 +472,56 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
                     <span>Tự động vừa ô</span>
                   </label>
                 </div>
-                {!selectedBubble.style.autoFontSize && (
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="range"
-                      min="10"
-                      max="48"
-                      value={selectedBubble.style.fontSize}
-                      onChange={(e) => updateStyle({ fontSize: Number(e.target.value) })}
-                      onMouseUp={flushHistoryCommit}
-                      onTouchEnd={flushHistoryCommit}
-                      className="flex-1 accent-indigo-500"
-                    />
-                    <span className="text-xs font-mono w-8 text-right text-slate-200">
-                      {selectedBubble.style.fontSize}px
-                    </span>
-                  </div>
-                )}
+                
+                <div className="flex items-center space-x-1.5">
+                  <button
+                    onClick={() => {
+                      const next = Math.max(8, selectedBubble.style.fontSize - 1);
+                      updateStyle({ fontSize: next, autoFontSize: false }, true);
+                    }}
+                    title="Giảm 1px"
+                    className="w-7 h-7 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 flex items-center justify-center shrink-0 transition-all active:scale-95"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+
+                  <input
+                    type="number"
+                    min={8}
+                    max={120}
+                    value={selectedBubble.style.fontSize}
+                    onChange={(e) => {
+                      const val = Math.min(120, Math.max(8, Number(e.target.value) || 8));
+                      updateStyle({ fontSize: val, autoFontSize: false });
+                    }}
+                    onBlur={flushHistoryCommit}
+                    className="w-12 bg-slate-950 border border-slate-800 text-center font-mono text-xs rounded-lg py-1 text-white focus:outline-none focus:border-indigo-500 shrink-0"
+                  />
+
+                  <button
+                    onClick={() => {
+                      const next = Math.min(120, selectedBubble.style.fontSize + 1);
+                      updateStyle({ fontSize: next, autoFontSize: false }, true);
+                    }}
+                    title="Tăng 1px"
+                    className="w-7 h-7 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800 flex items-center justify-center shrink-0 transition-all active:scale-95"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+
+                  <input
+                    type="range"
+                    min={8}
+                    max={80}
+                    value={selectedBubble.style.fontSize}
+                    onChange={(e) => {
+                      updateStyle({ fontSize: Number(e.target.value), autoFontSize: false });
+                    }}
+                    onMouseUp={flushHistoryCommit}
+                    onTouchEnd={flushHistoryCommit}
+                    className="flex-1 accent-indigo-500 min-w-0"
+                  />
+                </div>
               </div>
 
               {/* Alignment & Styles */}
@@ -515,6 +623,176 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
               </div>
             </div>
 
+            {/* 4. Manga Speech Bubble Shape & Frame Styling */}
+            <div className="space-y-3 bg-slate-900/70 p-3 rounded-xl border border-slate-800/80">
+              <div className="flex items-center space-x-1.5 text-xs font-semibold text-slate-300">
+                <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Hình Dạng Box Manga (Speech Bubble)</span>
+              </div>
+
+              {/* 6 Shape Presets Grid */}
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'ellipse', label: 'Bầu Dục / Elip', icon: Circle },
+                  { id: 'rounded', label: 'Bo Góc Mềm', icon: MessageSquare },
+                  { id: 'rectangle', label: 'Hộp Dẫn Truyện', icon: Square },
+                  { id: 'shout', label: 'Hét / Gai Nhọn', icon: Zap },
+                  { id: 'thought', label: 'Suy Nghĩ / Mây', icon: Cloud },
+                  { id: 'transparent', label: 'Trong Suốt', icon: Frame },
+                ].map((sh) => {
+                  const IconComp = sh.icon;
+                  const currentShape = selectedBubble.style.boxShape || (selectedBubble.style.boxPreset === 'transparent' ? 'transparent' : 'rounded');
+                  const isSelected = currentShape === sh.id;
+
+                  return (
+                    <button
+                      key={sh.id}
+                      onClick={() => {
+                        if (sh.id === 'transparent') {
+                          updateStyle({
+                            boxShape: 'transparent',
+                            boxPreset: 'transparent',
+                            backgroundOpacity: 0,
+                            boxBorderWidth: 0,
+                            strokeWidth: Math.max(3, selectedBubble.style.strokeWidth || 4),
+                          }, true);
+                        } else {
+                          updateStyle({
+                            boxShape: sh.id as any,
+                            boxPreset: 'custom',
+                            backgroundOpacity: selectedBubble.style.backgroundOpacity > 0 ? selectedBubble.style.backgroundOpacity : 1,
+                            backgroundColor: selectedBubble.style.backgroundColor || '#ffffff',
+                            boxBorderWidth: selectedBubble.style.boxBorderWidth > 0 ? selectedBubble.style.boxBorderWidth : (sh.id === 'rectangle' ? 2 : 1.5),
+                            boxBorderColor: selectedBubble.style.boxBorderColor || '#000000',
+                          }, true);
+                        }
+                      }}
+                      className={`flex flex-col items-center justify-center p-2 rounded-lg border text-center transition-all ${
+                        isSelected
+                          ? 'bg-indigo-600/25 border-indigo-500 text-white shadow-sm ring-1 ring-indigo-500/50'
+                          : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                      title={sh.label}
+                    >
+                      <IconComp className={`w-4 h-4 mb-1 ${isSelected ? 'text-indigo-400' : 'text-slate-400'}`} />
+                      <span className="text-[10px] font-medium leading-tight">{sh.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Box Fill & Background Opacity (If not transparent) */}
+              {selectedBubble.style.boxShape !== 'transparent' && (
+                <>
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/40">
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Màu nền hộp thoại:</label>
+                      <div className="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+                        <input
+                          type="color"
+                          value={selectedBubble.style.backgroundColor || '#ffffff'}
+                          onChange={(e) => updateStyle({ backgroundColor: e.target.value })}
+                          onBlur={flushHistoryCommit}
+                          className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                        />
+                        <span className="text-[10px] font-mono">{selectedBubble.style.backgroundColor}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Màu viền khung:</label>
+                      <div className="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+                        <input
+                          type="color"
+                          value={selectedBubble.style.boxBorderColor || '#000000'}
+                          onChange={(e) => updateStyle({ boxBorderColor: e.target.value })}
+                          onBlur={flushHistoryCommit}
+                          className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
+                        />
+                        <span className="text-[10px] font-mono">{selectedBubble.style.boxBorderColor}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Background Opacity Slider */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Độ đục nền (Opacity):</span>
+                      <span className="font-mono text-slate-200">{Math.round((selectedBubble.style.backgroundOpacity ?? 1) * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={selectedBubble.style.backgroundOpacity ?? 1}
+                      onChange={(e) => updateStyle({ backgroundOpacity: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+
+                  {/* Box Border Width */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Độ dày viền khung:</span>
+                      <span className="font-mono text-slate-200">{selectedBubble.style.boxBorderWidth ?? 0}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="8"
+                      step="0.5"
+                      value={selectedBubble.style.boxBorderWidth ?? 0}
+                      onChange={(e) => updateStyle({ boxBorderWidth: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+
+                  {/* Border Radius (For Rounded Box) */}
+                  {(selectedBubble.style.boxShape === 'rounded' || !selectedBubble.style.boxShape) && (
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Bán kính bo góc:</span>
+                        <span className="font-mono text-slate-200">{selectedBubble.style.borderRadius ?? 16}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="60"
+                        value={selectedBubble.style.borderRadius ?? 16}
+                        onChange={(e) => updateStyle({ borderRadius: Number(e.target.value) })}
+                        onMouseUp={flushHistoryCommit}
+                        onTouchEnd={flushHistoryCommit}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Box Padding Slider */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                      <span>Khoảng đệm chữ (Padding):</span>
+                      <span className="font-mono text-slate-200">{selectedBubble.style.boxPadding ?? 8}px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="2"
+                      max="30"
+                      value={selectedBubble.style.boxPadding ?? 8}
+                      onChange={(e) => updateStyle({ boxPadding: Number(e.target.value) })}
+                      onMouseUp={flushHistoryCommit}
+                      onTouchEnd={flushHistoryCommit}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
             {/* 4. Delete Bubble Button */}
             <div className="pt-2">
               <button
@@ -533,6 +811,8 @@ export const BubbleInspector: React.FC<BubbleInspectorProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
     </aside>
   );
 };

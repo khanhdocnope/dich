@@ -1,7 +1,7 @@
 import { Bubble, TextStyle } from '../types';
 
 export const defaultTextStyle: TextStyle = {
-  fontFamily: "'Nunito', 'Be Vietnam Pro', sans-serif",
+  fontFamily: "'Nunito', sans-serif",
   fontSize: 18,
   autoFontSize: true,
   fontWeight: '700',
@@ -15,6 +15,7 @@ export const defaultTextStyle: TextStyle = {
   boxBorderColor: '#000000',
   boxBorderWidth: 0,
   boxPreset: 'transparent',
+  boxShape: 'rounded',
   textAlign: 'center',
   lineHeight: 1.25,
   letterSpacing: 0.5,
@@ -22,6 +23,80 @@ export const defaultTextStyle: TextStyle = {
   isBold: true,
   isItalic: false,
   textTransform: 'none',
+};
+
+// Shape Builders for Manga Speech Bubbles
+export const buildShoutPath = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const cx = width / 2;
+  const cy = height / 2;
+  const rx = width / 2;
+  const ry = height / 2;
+  const numPoints = 16;
+  ctx.beginPath();
+  for (let i = 0; i < numPoints * 2; i++) {
+    const angle = (i * Math.PI) / numPoints;
+    const isSpike = i % 2 === 0;
+    const rRatio = isSpike ? 1.0 : 0.78;
+    const px = cx + Math.cos(angle) * (rx * rRatio);
+    const py = cy + Math.sin(angle) * (ry * rRatio);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+};
+
+export const buildThoughtPath = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const cx = width / 2;
+  const cy = height / 2;
+  const rx = width / 2;
+  const ry = height / 2;
+  const numBumps = 10;
+  ctx.beginPath();
+  for (let i = 0; i < numBumps; i++) {
+    const a1 = (i * 2 * Math.PI) / numBumps;
+    const a2 = ((i + 1) * 2 * Math.PI) / numBumps;
+    const midA = (a1 + a2) / 2;
+
+    const x1 = cx + Math.cos(a1) * rx * 0.9;
+    const y1 = cy + Math.sin(a1) * ry * 0.9;
+    const x2 = cx + Math.cos(a2) * rx * 0.9;
+    const y2 = cy + Math.sin(a2) * ry * 0.9;
+
+    const ctrlX = cx + Math.cos(midA) * rx * 1.15;
+    const ctrlY = cy + Math.sin(midA) * ry * 1.15;
+
+    if (i === 0) ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, x2, y2);
+  }
+  ctx.closePath();
+};
+
+export const buildBoxPath = (
+  ctx: CanvasRenderingContext2D,
+  shape: string,
+  width: number,
+  height: number,
+  radius: number
+) => {
+  if (shape === 'ellipse') {
+    ctx.beginPath();
+    ctx.ellipse(width / 2, height / 2, Math.max(1, width / 2), Math.max(1, height / 2), 0, 0, Math.PI * 2);
+  } else if (shape === 'rectangle') {
+    ctx.beginPath();
+    ctx.rect(0, 0, width, height);
+  } else if (shape === 'shout') {
+    buildShoutPath(ctx, width, height);
+  } else if (shape === 'thought') {
+    buildThoughtPath(ctx, width, height);
+  } else {
+    // 'rounded' (default)
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(0, 0, width, height, radius);
+    } else {
+      ctx.rect(0, 0, width, height);
+    }
+  }
 };
 
 // Word wrap algorithm for canvas text
@@ -104,27 +179,30 @@ export const renderBubbleOnCanvas = (
   }
 
   const radius = Math.min(style.borderRadius ?? 16, width / 2, height / 2);
+  const shape = style.boxShape || (style.boxPreset === 'transparent' ? 'transparent' : 'rounded');
 
-  // 1. Draw Background Fill if opacity > 0
-  if (style.backgroundColor && style.backgroundOpacity > 0) {
-    ctx.save();
-    ctx.fillStyle = style.backgroundColor;
-    ctx.globalAlpha = style.backgroundOpacity;
-    ctx.beginPath();
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(0, 0, width, height, radius);
-    } else {
-      ctx.rect(0, 0, width, height);
+  if (shape !== 'transparent') {
+    // 1. Draw Background Fill if opacity > 0
+    if (style.backgroundColor && style.backgroundOpacity > 0) {
+      ctx.save();
+      ctx.fillStyle = style.backgroundColor;
+      ctx.globalAlpha = style.backgroundOpacity;
+      buildBoxPath(ctx, shape, width, height, radius);
+      ctx.fill();
+      ctx.restore();
     }
-    ctx.fill();
 
     // 2. Draw Box Border Stroke if specified
     if (style.boxBorderWidth > 0 && style.boxBorderColor) {
+      ctx.save();
       ctx.lineWidth = style.boxBorderWidth;
       ctx.strokeStyle = style.boxBorderColor;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      buildBoxPath(ctx, shape, width, height, radius);
       ctx.stroke();
+      ctx.restore();
     }
-    ctx.restore();
   }
 
   // 3. Render Text
