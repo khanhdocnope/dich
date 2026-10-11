@@ -782,6 +782,7 @@ def health():
         "available_models": ["anime-lama", "lama"]
     }
 
+@api_router.post("/clean_page")
 @api_router.post("/api/clean_page")
 async def api_clean_page(req: CleanPagePayload):
     try:
@@ -807,6 +808,7 @@ async def api_clean_page(req: CleanPagePayload):
         print(f"Clean Page Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/inpaint")
 @api_router.post("/api/inpaint")
 async def api_inpaint(req: InpaintPayload):
     try:
@@ -826,8 +828,10 @@ async def api_inpaint(req: InpaintPayload):
             "stats": stats
         }
     except Exception as e:
+        print(f"Inpaint Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/detect")
 @api_router.post("/api/detect")
 async def api_detect(req: DetectPayload):
     try:
@@ -843,8 +847,10 @@ async def api_detect(req: DetectPayload):
             "count": len(boxes)
         }
     except Exception as e:
+        print(f"Detect Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/switch_model")
 @api_router.post("/api/switch_model")
 def api_switch_model(req: SwitchModelPayload):
     success = cleaner_pipeline.iopaint.load_model(req.modelName)
@@ -853,6 +859,7 @@ def api_switch_model(req: SwitchModelPayload):
         "current_model": cleaner_pipeline.iopaint.current_model_name
     }
 
+@api_router.post("/v1/inpaint")
 @api_router.post("/api/v1/inpaint")
 async def api_v1_inpaint(
     image: UploadFile = File(...),
@@ -884,6 +891,7 @@ async def api_v1_inpaint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"API error: {str(e)}")
 
+@api_router.post("/clean_zip")
 @api_router.post("/api/clean_zip")
 async def api_clean_zip(
     file: UploadFile = File(...),
@@ -1311,6 +1319,15 @@ if __name__ == "__main__":
 
     if hasattr(app, "include_router"):
         app.include_router(api_router)
-        print("✅ REST API endpoints (/health, /api/clean_page, /api/inpaint, /api/clean_zip, /api/v1/inpaint) successfully attached to Gradio server!")
+        try:
+            custom_paths = {r.path for r in api_router.routes}
+            custom_routes = [r for r in app.router.routes if getattr(r, "path", None) in custom_paths]
+            other_routes = [r for r in app.router.routes if r not in custom_routes]
+            app.router.routes = custom_routes + other_routes
+            app.routes = app.router.routes
+            print("✅ Custom REST API routes prioritized at front of routing table.")
+        except Exception as e:
+            print(f"⚠️ Reordering routes notice: {e}")
+        print("✅ REST API endpoints (/health, /clean_page, /api/clean_page, /inpaint, /detect, /clean_zip) successfully attached to Gradio server!")
 
     demo.block_thread()

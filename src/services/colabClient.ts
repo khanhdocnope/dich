@@ -69,7 +69,7 @@ export const switchIOPaintModel = async (
   if (!serverUrl) return { success: false };
   try {
     const cleanUrl = serverUrl.replace(/\/+$/, '');
-    const res = await fetch(`${cleanUrl}/api/switch_model`, {
+    let res = await fetch(`${cleanUrl}/api/switch_model`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -77,6 +77,18 @@ export const switchIOPaintModel = async (
       },
       body: JSON.stringify({ modelName }),
     });
+
+    if (res.status === 405 || res.status === 404) {
+      res = await fetch(`${cleanUrl}/switch_model`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: JSON.stringify({ modelName }),
+      });
+    }
+
     if (res.ok) {
       const data = await res.json();
       return { success: data.success, currentModel: data.current_model };
@@ -97,19 +109,32 @@ export const cleanPageWithAI = async (
   try {
     const cleanUrl = serverUrl.replace(/\/+$/, '');
     const payloadImg = await ensureBase64(imageBase64);
+    const bodyStr = JSON.stringify({
+      imageBase64: payloadImg,
+      dilationPx: options?.dilationPx ?? 4,
+      flatThreshold: options?.flatThreshold ?? 3.5,
+    });
 
-    const res = await fetch(`${cleanUrl}/api/clean_page`, {
+    let res = await fetch(`${cleanUrl}/api/clean_page`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true',
       },
-      body: JSON.stringify({
-        imageBase64: payloadImg,
-        dilationPx: options?.dilationPx ?? 4,
-        flatThreshold: options?.flatThreshold ?? 3.5,
-      }),
+      body: bodyStr,
     });
+
+    // Fallback to /clean_page if Gradio intercepts /api/clean_page with 405 Method Not Allowed or 404
+    if (res.status === 405 || res.status === 404) {
+      res = await fetch(`${cleanUrl}/clean_page`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: bodyStr,
+      });
+    }
 
     if (res.ok) {
       const data = await res.json();
@@ -141,15 +166,27 @@ export const detectTextRegions = async (
   try {
     const cleanUrl = serverUrl.replace(/\/+$/, '');
     const payloadImg = await ensureBase64(imageBase64);
+    const bodyStr = JSON.stringify({ imageBase64: payloadImg });
 
-    const res = await fetch(`${cleanUrl}/api/detect`, {
+    let res = await fetch(`${cleanUrl}/api/detect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true',
       },
-      body: JSON.stringify({ imageBase64: payloadImg }),
+      body: bodyStr,
     });
+
+    if (res.status === 405 || res.status === 404) {
+      res = await fetch(`${cleanUrl}/detect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: bodyStr,
+      });
+    }
 
     if (res.ok) {
       const data = await res.json();
@@ -180,15 +217,27 @@ export const inpaintImageWithLaMa = async (
     const cleanUrl = serverUrl.replace(/\/+$/, '');
     const payloadImg = await ensureBase64(imageBase64);
     const payloadMask = await ensureBase64(maskBase64);
+    const bodyStr = JSON.stringify({ imageBase64: payloadImg, maskBase64: payloadMask });
 
-    const res = await fetch(`${cleanUrl}/api/inpaint`, {
+    let res = await fetch(`${cleanUrl}/api/inpaint`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': 'true',
       },
-      body: JSON.stringify({ imageBase64: payloadImg, maskBase64: payloadMask }),
+      body: bodyStr,
     });
+
+    if (res.status === 405 || res.status === 404) {
+      res = await fetch(`${cleanUrl}/inpaint`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: bodyStr,
+      });
+    }
 
     if (res.ok) {
       const data = await res.json();
