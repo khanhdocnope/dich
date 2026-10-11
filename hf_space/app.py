@@ -976,6 +976,10 @@ def create_gradio_ui() -> gr.Blocks:
                             """
                             #### 🖌️ Bước 2: Quẹt Cọ Chọn Vùng Xóa (Siêu Mượt, Không Lag Máy Khách)
                             *Vẽ bôi đỏ các vùng chữ thoại cần xóa. Khi bấm chạy, AI sẽ tự động phóng to mask và xóa trực tiếp trên file gốc 1:1.*
+                            
+                            💡 **Mẹo điều khiển trên màn hình điện thoại:**
+                            - **1 ngón tay:** Vẽ cọ tô đỏ hoặc tẩy.
+                            - **2 ngón tay cùng lúc:** Chạm 2 ngón tay để **Kéo di chuyển ảnh (Pan)** hoặc **Phóng to / Thu nhỏ (Pinch-to-zoom)** đến góc tranh cần vẽ mà không bị quẹt lem nét!
                             """
                         )
                         editor_input = gr.ImageEditor(
