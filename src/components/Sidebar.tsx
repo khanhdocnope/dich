@@ -313,15 +313,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             {/* Quick Search Field */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-text-muted" />
+            <div className="flex items-center gap-2 bg-surface-container-lowest border border-whisper rounded-xl px-2.5 py-1.5 focus-within:border-primary/50 transition-colors">
+              <Search className="w-3.5 h-3.5 text-text-muted shrink-0" />
               <input
                 type="text"
                 placeholder={t.filterPlaceholder}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full bg-surface-container-lowest border border-whisper text-label-sm rounded-xl pl-8 pr-3 py-1.5 text-ink-paper placeholder-text-muted focus:outline-none focus:border-primary/50"
+                className="w-full bg-transparent border-none p-0 text-label-sm text-ink-paper placeholder-text-muted focus:outline-none focus:ring-0"
+                style={{ padding: 0, border: 'none', outline: 'none' }}
               />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="text-text-muted hover:text-ink-paper p-0.5 rounded transition-colors shrink-0"
+                  title="Xóa tìm kiếm"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
           </div>
 
